@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/UnpackVision.Core/UnpackVision.Core.csproj" />
+    <Project Path="src/UnpackVision.Infrastructure/UnpackVision.Infrastructure.csproj" />
+    <Project Path="src/UnpackVision.Service/UnpackVision.Service.csproj" />
+    <Project Path="src/UnpackVision.App/UnpackVision.App.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/UnpackVision.Tests/UnpackVision.Tests.csproj" />
+  </Folder>
+</Solution>

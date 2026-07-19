@@ -1,0 +1,134 @@
+<Window x:Class="UnpackVision.App.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="系统配置" Width="760" Height="650" MinWidth="680" MinHeight="560"
+        Background="#F7F8FC" WindowStartupLocation="CenterOwner">
+  <Grid Margin="18">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <TabControl x:Name="SettingsTabControl" Background="White" BorderBrush="{StaticResource BorderBrush}">
+      <TabItem Header="系统与同步">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <Grid Margin="24">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="145" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Text="录像保存位置" VerticalAlignment="Center" />
+            <TextBox x:Name="RecordingRootInput" Grid.Column="1" Height="38" Padding="9" />
+            <Button Grid.Column="2" Content="选择" Margin="8,0,0,0" Padding="13,7" Click="BrowseRecordingRoot_OnClick" />
+            <TextBlock Grid.Row="1" Text="Excel 工作簿" Margin="0,16,0,0" VerticalAlignment="Center" />
+            <TextBox x:Name="ExcelPathInput" Grid.Row="1" Grid.Column="1" Height="38" Margin="0,16,0,0" Padding="9" />
+            <Button Grid.Row="1" Grid.Column="2" Content="选择" Margin="8,16,0,0" Padding="13,7" Click="BrowseExcel_OnClick" />
+            <TextBlock Grid.Row="2" Text="最长录像（分钟）" Margin="0,16,0,0" VerticalAlignment="Center" />
+            <TextBox x:Name="MaximumMinutesInput" Grid.Row="2" Grid.Column="1" Width="130" HorizontalAlignment="Left" Height="38" Margin="0,16,0,0" Padding="9" />
+            <CheckBox x:Name="LivePreviewCheck" Grid.Row="3" Grid.Column="1" Content="启动后立即显示实时相机" Margin="0,20,0,0" />
+            <CheckBox x:Name="VoiceCheck" Grid.Row="4" Grid.Column="1" Content="启用开始、停止和异常语音播报" Margin="0,14,0,0" />
+            <TextBlock Grid.Row="5" Text="播报音量" Margin="0,18,0,0" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,12,0,0">
+              <Slider x:Name="VoiceVolumeSlider" Minimum="20" Maximum="100" TickFrequency="5" Width="300" />
+              <TextBlock Text="{Binding Value, ElementName=VoiceVolumeSlider, StringFormat={}{0:0}%}" Margin="12,0,0,0" VerticalAlignment="Center" />
+              <Button Content="试听" Style="{StaticResource SecondaryButton}" Padding="11,5" Margin="12,0,0,0"
+                      Click="TestVoiceButton_OnClick" />
+            </StackPanel>
+            <TextBlock Grid.Row="6" Grid.ColumnSpan="3" Margin="0,24,0,0" Foreground="#7D8494" TextWrapping="Wrap"
+                       Text="Excel 被占用时不会强行写入；任务会保留在 SQLite 队列中，工作簿关闭后自动重试。" />
+          </Grid>
+        </ScrollViewer>
+      </TabItem>
+      <TabItem Header="相机信息">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <Grid Margin="24">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="145" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Text="视频来源" VerticalAlignment="Center" />
+            <ComboBox x:Name="CameraSourceKindInput" Grid.Column="1" Height="38" Padding="8" SelectionChanged="CameraSourceKindInput_OnSelectionChanged">
+              <ComboBoxItem Content="自动选择本地摄像头" Tag="AutoLocal" />
+              <ComboBoxItem Content="指定 Windows 摄像头（USB / iVCam）" Tag="WindowsCamera" />
+              <ComboBoxItem Content="IPC / 自定义 RTSP、HTTP 视频流" Tag="NetworkStream" />
+              <ComboBoxItem Content="海康威视 NVR / DVR" Tag="HikvisionRecorder" />
+            </ComboBox>
+
+            <TextBlock Grid.Row="1" Text="本地相机序号" Margin="0,14,0,0" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,14,0,0">
+              <ComboBox x:Name="CameraIndexInput" Width="190" Height="38" Padding="8" />
+              <CheckBox x:Name="AutoBestCameraCheck" Content="自动模式优先满足设定分辨率" VerticalAlignment="Center" Margin="14,0,0,0" />
+            </StackPanel>
+
+            <TextBlock Grid.Row="2" Text="IPC 流地址" Margin="0,14,0,0" VerticalAlignment="Center" />
+            <TextBox x:Name="NetworkStreamUrlInput" Grid.Row="2" Grid.Column="1" Height="38" Margin="0,14,0,0" Padding="9"
+                     ToolTip="例如 rtsp://192.168.1.20:554/live 或 HTTP MJPEG 地址" />
+
+            <TextBlock Grid.Row="3" Text="海康录像机" Margin="0,14,0,0" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0,14,0,0">
+              <TextBox x:Name="HikvisionHostInput" Width="210" Height="38" Padding="9" ToolTip="IP 地址或域名" />
+              <TextBlock Text=" 端口 " VerticalAlignment="Center" /><TextBox x:Name="HikvisionPortInput" Width="75" Height="38" Padding="9" />
+              <TextBlock Text=" 通道 " VerticalAlignment="Center" /><TextBox x:Name="HikvisionChannelInput" Width="65" Height="38" Padding="9" />
+              <ComboBox x:Name="HikvisionStreamInput" Width="90" Height="38" Margin="8,0,0,0">
+                <ComboBoxItem Content="主码流" /><ComboBoxItem Content="子码流" />
+              </ComboBox>
+            </StackPanel>
+
+            <TextBlock Grid.Row="4" Text="网络账号" Margin="0,14,0,0" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0,14,0,0">
+              <TextBox x:Name="NetworkUsernameInput" Width="210" Height="38" Padding="9" />
+              <TextBlock Text=" 密码 " VerticalAlignment="Center" />
+              <PasswordBox x:Name="NetworkPasswordInput" Width="210" Height="38" Padding="9" />
+            </StackPanel>
+
+            <TextBlock Grid.Row="5" Text="分辨率" Margin="0,14,0,0" VerticalAlignment="Center" />
+            <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,14,0,0">
+              <TextBox x:Name="WidthInput" Width="110" Height="38" Padding="9" /><TextBlock Text=" × " VerticalAlignment="Center" />
+              <TextBox x:Name="HeightInput" Width="110" Height="38" Padding="9" />
+            </StackPanel>
+            <TextBlock Grid.Row="6" Text="帧率" Margin="0,14,0,0" VerticalAlignment="Center" /><TextBox x:Name="FpsInput" Grid.Row="6" Grid.Column="1" Width="120" HorizontalAlignment="Left" Height="38" Margin="0,14,0,0" Padding="9" />
+            <CheckBox x:Name="AutoFocusCheck" Grid.Row="7" Grid.Column="1" Content="自动聚焦（网络视频源通常由摄像机或录像机管理）" Margin="0,16,0,0" />
+            <TextBlock Grid.Row="8" Text="亮度" Margin="0,16,0,0" /><Slider x:Name="BrightnessSlider" Grid.Row="8" Grid.Column="1" Minimum="0" Maximum="100" TickFrequency="1" Margin="0,10,0,0" />
+            <TextBlock Grid.Row="9" Text="对比度" Margin="0,16,0,0" /><Slider x:Name="ContrastSlider" Grid.Row="9" Grid.Column="1" Minimum="0" Maximum="100" TickFrequency="1" Margin="0,10,0,0" />
+            <TextBlock Grid.Row="10" Text="清晰度" Margin="0,16,0,0" /><Slider x:Name="SharpnessSlider" Grid.Row="10" Grid.Column="1" Minimum="0" Maximum="100" TickFrequency="1" Margin="0,10,0,0" />
+            <TextBlock Grid.Row="11" Text="饱和度" Margin="0,16,0,0" /><Slider x:Name="SaturationSlider" Grid.Row="11" Grid.Column="1" Minimum="0" Maximum="100" TickFrequency="1" Margin="0,10,0,0" />
+            <TextBlock Grid.Row="12" Grid.ColumnSpan="2" Margin="0,24,0,0" Foreground="#7D8494" TextWrapping="Wrap"
+                       Text="亮度、对比度、清晰度和饱和度使用软件实时处理，对 USB、iVCam、IPC 和海康录像机都有效，并会写入最终录像。网络密码使用 Windows DPAPI 加密保存。录像过程中不能切换视频源。" />
+          </Grid>
+        </ScrollViewer>
+      </TabItem>
+      <TabItem Header="单号配置">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <Grid Margin="24">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="160" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Text="单号长度" VerticalAlignment="Center" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+              <TextBox x:Name="MinimumLengthInput" Width="100" Height="38" Padding="9" /><TextBlock Text="  —  " VerticalAlignment="Center" />
+              <TextBox x:Name="MaximumLengthInput" Width="100" Height="38" Padding="9" /><TextBlock Text=" 位" VerticalAlignment="Center" />
+            </StackPanel>
+            <CheckBox x:Name="FilterPrefixCheck" Grid.Row="1" Content="过滤开头" Margin="0,18,0,0" />
+            <TextBox x:Name="PrefixInput" Grid.Row="1" Grid.Column="1" Height="38" Margin="0,12,0,0" Padding="9" />
+            <CheckBox x:Name="FilterSuffixCheck" Grid.Row="2" Content="过滤结尾" Margin="0,18,0,0" />
+            <TextBox x:Name="SuffixInput" Grid.Row="2" Grid.Column="1" Height="38" Margin="0,12,0,0" Padding="9" />
+            <TextBlock Grid.Row="3" Text="防误扫间隔（毫秒）" Margin="0,18,0,0" VerticalAlignment="Center" />
+            <TextBox x:Name="DebounceInput" Grid.Row="3" Grid.Column="1" Width="130" HorizontalAlignment="Left" Height="38" Margin="0,12,0,0" Padding="9" />
+            <TextBlock Grid.Row="4" Grid.ColumnSpan="2" Margin="0,22,0,0" Foreground="#7D8494" TextWrapping="Wrap"
+                       Text="录制中再次扫描当前快递单号会结束并保存；扫描不同快递单号会先保存当前录像，再自动开始下一单录像。" />
+          </Grid>
+        </ScrollViewer>
+      </TabItem>
+    </TabControl>
+    <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+      <Button Content="取消" Background="#EEF0F8" Foreground="#4A5265" Click="Cancel_OnClick" />
+      <Button Content="保存" Width="100" Margin="10,0,0,0" Click="Save_OnClick" />
+    </StackPanel>
+  </Grid>
+</Window>
