@@ -34,6 +34,7 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
     private Mat? _lastFrame;
     private Exception? _captureError;
     private RecordingSession? _activeSession;
+    private IReadOnlyList<RecordTagAssignment> _activeIssueTags = [];
     private int _rotationQuarterTurns;
     private bool _mirror;
     private int _previewFrameCounter;
@@ -65,7 +66,7 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
         try
         {
             ThrowIfDisposed();
-            EnsureCameraStartedCore();
+            await Task.Run(EnsureCameraStartedCore, cancellationToken);
         }
         finally
         {
@@ -85,7 +86,36 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
             }
             CopyCameraOptions(cameraOptions, _cameraOptions);
             await StopCameraCoreAsync(cancellationToken);
-            EnsureCameraStartedCore();
+            await Task.Run(EnsureCameraStartedCore, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task ConfigureCameraAsync(
+        CameraOptions cameraOptions,
+        bool restartPreview,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            if (_activeSession is not null)
+            {
+                throw new InvalidOperationException("录像过程中不能切换相机来源");
+            }
+
+            CopyCameraOptions(cameraOptions, _cameraOptions);
+            if (!restartPreview || !IsPreviewing)
+            {
+                return;
+            }
+
+            await StopCameraCoreAsync(cancellationToken);
+            await Task.Run(EnsureCameraStartedCore, cancellationToken);
         }
         finally
         {
@@ -108,7 +138,7 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
             {
                 throw new InvalidOperationException("相机已经在录制");
             }
-            EnsureCameraStartedCore();
+            await Task.Run(EnsureCameraStartedCore, cancellationToken);
             if (_captureError is not null)
             {
                 throw new InvalidOperationException("相机预览发生错误，请重新连接相机", _captureError);
@@ -142,6 +172,7 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
             {
                 _writer = writer;
                 _activeSession = session;
+                _activeIssueTags = [];
             }
             return session;
         }
@@ -161,9 +192,12 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
             EnsureActive(session);
             FinalizeWriterCore();
             var error = _captureError;
+            IReadOnlyList<RecordTagAssignment> issueTags;
             lock (_writerSync)
             {
+                issueTags = _activeIssueTags;
                 _activeSession = null;
+                _activeIssueTags = [];
             }
             if (error is not null)
             {
@@ -171,9 +205,13 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
             }
 
             var endedAt = DateTimeOffset.Now;
-            var finalPath = Path.Combine(
+            var finalPath = RecordingFileNameService.GetAvailableFinalPath(
                 Path.GetDirectoryName(session.TemporaryPath)!,
-                $"{SanitizeFileName(session.TrackingNo)}_{session.StartedAt:yyyyMMddHHmmss}_{endedAt:yyyyMMddHHmmss}.mp4");
+                session.TrackingNo,
+                session.StartedAt,
+                endedAt,
+                issueTags,
+                session.RecordId);
             if (!File.Exists(session.TemporaryPath) || new FileInfo(session.TemporaryPath).Length == 0)
             {
                 throw new InvalidDataException("录像文件为空");
@@ -187,6 +225,7 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
             lock (_writerSync)
             {
                 _activeSession = null;
+                _activeIssueTags = [];
             }
             throw;
         }
@@ -216,6 +255,23 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
         {
             _gate.Release();
         }
+    }
+
+    public Task UpdateIssueOverlayAsync(
+        Guid recordId,
+        IReadOnlyList<RecordTagAssignment> activeTags,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_writerSync)
+        {
+            if (_activeSession?.RecordId != recordId)
+            {
+                throw new InvalidOperationException("当前录像与异常标签记录不一致");
+            }
+            _activeIssueTags = activeTags.Where(item => item.IsActive).OrderBy(item => item.TaggedAt).ToArray();
+        }
+        return Task.CompletedTask;
     }
 
     public async Task<string> TakeSnapshotAsync(CancellationToken cancellationToken = default)
@@ -504,7 +560,7 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
                     session = _activeSession;
                     if (session is not null)
                     {
-                        DrawRecordingWatermark(frame, session);
+                        DrawRecordingWatermark(frame, session, _activeIssueTags);
                     }
                     _writer?.Write(frame);
                 }
@@ -606,7 +662,7 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
         return resized;
     }
 
-    private static void DrawRecordingWatermark(Mat frame, RecordingSession session)
+    private static void DrawRecordingWatermark(Mat frame, RecordingSession session, IReadOnlyList<RecordTagAssignment> issueTags)
     {
         var scale = Math.Max(0.8, frame.Width / 1920d);
         var thickness = Math.Max(2, (int)Math.Round(scale * 2));
@@ -614,13 +670,36 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
         var y = Math.Max(42, frame.Height / 22);
         DrawOutlinedText(frame, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), new Point(x, y), scale, thickness);
         DrawChineseTrackingText(frame, session.TrackingNo, x, y + (int)(12 * scale), scale, thickness);
+        var line = 0;
+        foreach (var tag in issueTags.Where(item => item.IsActive).Take(4))
+        {
+            DrawChineseText(
+                frame,
+                $"异常：{tag.TagName} {tag.TaggedAt.LocalDateTime:HH:mm:ss}",
+                x,
+                y + (int)((52 + line * 36) * scale),
+                scale * 0.88,
+                thickness,
+                System.Drawing.Color.FromArgb(255, 255, 75, 75));
+            line++;
+        }
     }
 
     private static void DrawChineseTrackingText(Mat frame, string trackingNo, int x, int y, double scale, int thickness)
+        => DrawChineseText(frame, $"快递单号：{trackingNo}", x, y, scale, thickness, System.Drawing.Color.White);
+
+    private static void DrawChineseText(
+        Mat frame,
+        string text,
+        int x,
+        int y,
+        double scale,
+        int thickness,
+        System.Drawing.Color fillColor)
     {
         if (frame.Type() != MatType.CV_8UC3 || frame.Empty())
         {
-            DrawOutlinedText(frame, $"Tracking No: {trackingNo}", new Point(x, y + (int)(28 * scale)), scale, thickness);
+            DrawOutlinedText(frame, text, new Point(x, y + (int)(28 * scale)), scale, thickness);
             return;
         }
         try
@@ -637,7 +716,7 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
             using var family = new System.Drawing.FontFamily("Microsoft YaHei UI");
             using var path = new GraphicsPath();
             path.AddString(
-                $"快递单号：{trackingNo}",
+                text,
                 family,
                 (int)System.Drawing.FontStyle.Bold,
                 (float)(27 * scale),
@@ -648,12 +727,13 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
                 LineJoin = LineJoin.Round
             };
             graphics.DrawPath(outline, path);
-            graphics.FillPath(System.Drawing.Brushes.White, path);
+            using var fill = new System.Drawing.SolidBrush(fillColor);
+            graphics.FillPath(fill, path);
             graphics.Flush();
         }
         catch (Exception ex) when (ex is ArgumentException or PlatformNotSupportedException)
         {
-            DrawOutlinedText(frame, $"Tracking No: {trackingNo}", new Point(x, y + (int)(28 * scale)), scale, thickness);
+            DrawOutlinedText(frame, text, new Point(x, y + (int)(28 * scale)), scale, thickness);
         }
     }
 

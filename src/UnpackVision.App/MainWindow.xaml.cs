@@ -1,7 +1,9 @@
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
+using System.Net.Http.Json;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -15,17 +17,24 @@ namespace UnpackVision.App;
 
 public partial class MainWindow : Window
 {
-    private readonly ObservableCollection<RecentRecordingItem> _recentItems = [];
+    private static readonly Brush CameraReadyBackground = CreateFrozenBrush(232, 248, 239);
+    private static readonly Brush CameraReadyForeground = CreateFrozenBrush(32, 126, 78);
     private readonly DispatcherTimer _recordingTimer;
     private readonly DispatcherTimer _imageControlTimer;
+    private readonly DispatcherTimer _noteSaveTimer;
+    private readonly DispatcherTimer _stationStateTimer;
     private readonly LoudSpeechService _speech = new();
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly SemaphoreSlim _recentRefreshGate = new(1, 1);
     private readonly LocalSettingsStore _settingsStore = new();
     private LocalSettings _settings = new();
     private StorageOptions? _storageOptions;
     private IScanRecordRepository? _repository;
     private OpenCvRecordingBackend? _recordingBackend;
     private RecordingCoordinator? _coordinator;
+    private IScanCommandLedger? _scanCommandLedger;
+    private StationScanCommandRouter? _stationRouter;
+    private DesktopCommandListener? _desktopCommandListener;
     private SyncDispatcher? _syncDispatcher;
     private RawInputScannerCapture? _rawScanner;
     private string? _lastProcessedCode;
@@ -37,16 +46,27 @@ public partial class MainWindow : Window
     private bool _allowClose;
     private bool _updatingCameraSourceSelector;
     private int _previewUpdatePending;
+    private bool _loadingIssueNote;
+    private bool _designerPageVisible;
+    private bool _stationStatePollActive;
+    private bool _updatePromptShown;
+    private Guid? _mirroredStationRecordId;
+    private string _displayedTrackingNo = string.Empty;
+    private string _lastCameraStatusText = string.Empty;
+    private string _lastCameraRuntimeKey = string.Empty;
 
     public MainWindow()
     {
         InitializeComponent();
         SourceInitialized += (_, _) => ApplyNativeWindowAppearance();
-        RecentItemsControl.ItemsSource = _recentItems;
+        RecentItemsControl.ItemsSource = Array.Empty<RecentRecordingItem>();
         _recordingTimer = new DispatcherTimer(TimeSpan.FromSeconds(1), DispatcherPriority.Normal, OnRecordingTimer, Dispatcher);
         _imageControlTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(90), DispatcherPriority.Background, OnImageControlTimer, Dispatcher);
+        _noteSaveTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(500), DispatcherPriority.Background, SaveNoteTimer_OnTick, Dispatcher);
+        _stationStateTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(750), DispatcherPriority.Background, OnStationStateTimer, Dispatcher);
         Loaded += OnLoaded;
         Closing += OnClosing;
+        App.Updates.UpdateReady += Updates_OnUpdateReady;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -74,11 +94,22 @@ public partial class MainWindow : Window
                 new SystemClock(),
                 _settings.Scanner);
             _coordinator.StateChanged += Coordinator_OnStateChanged;
+            _scanCommandLedger = new SqliteScanCommandLedger(_storageOptions, new SystemClock());
+            await _scanCommandLedger.InitializeAsync(_lifetime.Token);
+            RebuildStationRouter();
+            await StationHostConnection.EnsureRunningAsync(_lifetime.Token);
+            _desktopCommandListener = new DesktopCommandListener(RouteMobileCommandAsync, GetDesktopStationState);
+            await _desktopCommandListener.StartAsync(_lifetime.Token);
+            QuickIssueTagsControl.ItemsSource = _settings.IssueTags.Where(item => item.Enabled).OrderBy(item => item.SortOrder).ToArray();
+            LabelDesigner.ConfigureIssueTags(_settings.IssueTags);
 
             _rawScanner = new RawInputScannerCapture(this, () => _settings.Scanner);
             _rawScanner.BarcodeScanned += RawScanner_OnBarcodeScanned;
             _syncDispatcher = new SyncDispatcher(_repository, [new ExcelConnector(excelOptions)], new SystemClock());
             _ = RunSyncLoopAsync(_lifetime.Token);
+
+            _stationStateTimer.Start();
+            await PollStationStateAsync();
 
             await RefreshRecentAsync();
             FooterText.Text = interrupted == 0
@@ -102,6 +133,10 @@ public partial class MainWindow : Window
                 CameraStatusText.Text = "实时预览已关闭";
             }
             ScannerInput.Focus();
+            if (_settings.AutoCheckUpdates)
+            {
+                _ = App.Updates.CheckAndDownloadAsync(force: false, _lifetime.Token);
+            }
         }
         catch (Exception ex)
         {
@@ -143,6 +178,14 @@ public partial class MainWindow : Window
         _lastProcessedAt = now;
         FooterText.Text = $"扫码设备：{deviceName}";
 
+        var issueMatch = IssueTagBarcodeRouter.Match(normalized, _settings.IssueTags);
+        if (issueMatch.Action != IssueBarcodeAction.None)
+        {
+            await ProcessIssueBarcodeAsync(issueMatch);
+            return;
+        }
+
+        await FlushIssueNoteAsync();
         await _coordinator.ProcessScanAsync(normalized, _settings.Workflow, _lifetime.Token);
         await RefreshRecentAsync();
     }
@@ -166,6 +209,10 @@ public partial class MainWindow : Window
                 {
                     ShowIdleUi("录像已保存，可以继续扫描下一个快递");
                     Speak("录像已保存");
+                    if (App.Updates.Status.ReadyToInstall)
+                    {
+                        Updates_OnUpdateReady(App.Updates, EventArgs.Empty);
+                    }
                 }
                 else
                 {
@@ -194,8 +241,59 @@ public partial class MainWindow : Window
         ScannerInput.Focus();
     }
 
+    private void Updates_OnUpdateReady(object? sender, EventArgs e) =>
+        Dispatcher.BeginInvoke(async () =>
+        {
+            if (_updatePromptShown)
+            {
+                return;
+            }
+            if (_coordinator?.State is RecordingState.Recording or RecordingState.Starting or RecordingState.Saving)
+            {
+                FooterText.Text = "新版本已下载，将在本单录像保存后提示安装";
+                return;
+            }
+            _updatePromptShown = true;
+            if (MessageBox.Show(
+                    this,
+                    $"{App.Updates.Status.Message}\n\n是否立即重启并安装？",
+                    "软件更新",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Information) == MessageBoxResult.Yes)
+            {
+                await TryApplyUpdateAsync();
+            }
+        });
+
+    internal async Task TryApplyUpdateAsync()
+    {
+        if (!App.Updates.Status.ReadyToInstall)
+        {
+            MessageBox.Show(this, "当前没有已下载的更新。", "软件更新", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+        if (_coordinator?.State is RecordingState.Recording or RecordingState.Starting or RecordingState.Saving)
+        {
+            MessageBox.Show(this, "正在录像或保存，完成当前包裹后才能更新。", "暂不能更新", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        try
+        {
+            await FlushIssueNoteAsync();
+            FooterText.Text = "正在关闭后台组件并安装更新…";
+            await StationHostConnection.StopAsync(_lifetime.Token);
+            App.Updates.ApplyAndRestart();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this, $"安装更新失败：{exception.Message}", "软件更新", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void ShowRecordingUi(ScanRecord record)
     {
+        _displayedTrackingNo = record.TrackingNo;
         CurrentStateText.Text = record.DuplicateOf is null ? "正在录像" : "正在录像 · 重复单号";
         StateDot.Fill = new SolidColorBrush(Color.FromRgb(229, 71, 71));
         RecordingBadge.Visibility = Visibility.Visible;
@@ -207,10 +305,12 @@ public partial class MainWindow : Window
         _nextTimeoutAt = _recordingStartedAt.Value.AddMinutes(_settings.MaximumRecordingMinutes);
         _recordingTimer.Start();
         UpdateCurrentTrackingBarcode(record.TrackingNo);
+        UpdateIssueUi(record);
     }
 
     private void ShowIdleUi(string message)
     {
+        _displayedTrackingNo = string.Empty;
         CurrentStateText.Text = "等待扫码";
         StateDot.Fill = new SolidColorBrush(Color.FromRgb(67, 181, 129));
         RecordingBadge.Visibility = Visibility.Collapsed;
@@ -218,11 +318,106 @@ public partial class MainWindow : Window
         RecordingActionPanel.Visibility = Visibility.Collapsed;
         IdleActionPanel.Visibility = Visibility.Visible;
         CurrentTrackingBarcodeImage.Source = null;
+        _noteSaveTimer.Stop();
+        _loadingIssueNote = true;
+        IssueNoteInput.Clear();
+        _loadingIssueNote = false;
+        ActiveIssueSummaryText.Text = "当前没有异常标签";
+        WatermarkIssueText.Text = string.Empty;
         AnimateIn(IdleActionPanel);
         _recordingTimer.Stop();
         _recordingStartedAt = null;
         _nextTimeoutAt = null;
         FooterText.Text = message;
+    }
+
+    private async void OnStationStateTimer(object? sender, EventArgs e) =>
+        await PollStationStateAsync();
+
+    private async Task PollStationStateAsync()
+    {
+        if (_stationStatePollActive || _repository is null || _lifetime.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _stationStatePollActive = true;
+        try
+        {
+            var stationId = Uri.EscapeDataString(Environment.MachineName);
+            var snapshot = await StationHostConnection.Http.GetFromJsonAsync<StationStateSnapshot>(
+                $"/api/v1/stations/{stationId}/state",
+                StationHostConnection.JsonOptions,
+                _lifetime.Token);
+            if (snapshot is null)
+            {
+                return;
+            }
+
+            var localRecording = _coordinator?.State is RecordingState.Starting or RecordingState.Recording or RecordingState.Saving;
+            switch (snapshot.RecordingState)
+            {
+                case RecordingState.Starting when !localRecording:
+                    CurrentStateText.Text = "手机指令 · 正在启动录像";
+                    StateDot.Fill = Brushes.Orange;
+                    FooterText.Text = snapshot.TrackingNo is { Length: > 0 }
+                        ? $"已收到手机扫码：{snapshot.TrackingNo}"
+                        : "已收到手机扫码，正在启动录像";
+                    break;
+
+                case RecordingState.Recording when !localRecording && snapshot.RecordId is { } recordId:
+                    if (_mirroredStationRecordId != recordId)
+                    {
+                        var record = await _repository.GetAsync(recordId, _lifetime.Token);
+                        if (record is not null)
+                        {
+                            _mirroredStationRecordId = recordId;
+                            ShowRecordingUi(record);
+                            FooterText.Text = $"手机扫码已触发录像：{record.TrackingNo}";
+                            Speak("手机扫码，开始录制");
+                        }
+                    }
+                    break;
+
+                case RecordingState.Saving when _mirroredStationRecordId is not null:
+                    CurrentStateText.Text = "手机指令 · 正在保存";
+                    StateDot.Fill = Brushes.Orange;
+                    FooterText.Text = "手机已发出结束指令，正在保存录像";
+                    break;
+
+                case RecordingState.Idle when _mirroredStationRecordId is not null:
+                case RecordingState.Completed when _mirroredStationRecordId is not null:
+                case RecordingState.Failed when _mirroredStationRecordId is not null:
+                    var failed = snapshot.RecordingState == RecordingState.Failed;
+                    _mirroredStationRecordId = null;
+                    ShowIdleUi(failed ? "手机指令录像失败，请查看全部记录" : "手机指令录像已保存，可以继续扫描");
+                    Speak(failed ? "录像失败，请检查记录" : "录像已保存");
+                    await RefreshRecentAsync();
+                    break;
+            }
+
+        }
+        catch (HttpRequestException)
+        {
+            if (_mirroredStationRecordId is not null)
+            {
+                FooterText.Text = "工位主机连接中断，正在自动重连";
+            }
+        }
+        catch (JsonException)
+        {
+            FooterText.Text = "工位主机状态格式异常，正在自动重试";
+        }
+        catch (TaskCanceledException) when (!_lifetime.IsCancellationRequested)
+        {
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            _stationStatePollActive = false;
+        }
     }
 
     private async void OnRecordingTimer(object? sender, EventArgs e)
@@ -235,7 +430,7 @@ public partial class MainWindow : Window
         var elapsed = now - _recordingStartedAt.Value;
         RecordingTimeText.Text = $"录制中 {elapsed:hh\\:mm\\:ss}";
         WatermarkTimeText.Text = now.ToString("yyyy-MM-dd HH:mm:ss");
-        WatermarkTrackingText.Text = $"快递单号：{_coordinator?.CurrentRecord?.TrackingNo ?? ""}";
+        WatermarkTrackingText.Text = $"快递单号：{_displayedTrackingNo}";
         if (_nextTimeoutAt is not null && now >= _nextTimeoutAt)
         {
             _nextTimeoutAt = now.AddMinutes(_settings.MaximumRecordingMinutes);
@@ -267,9 +462,14 @@ public partial class MainWindow : Window
             {
                 CameraPreviewImage.Source = UiImage.FromBytes(e.JpegBytes);
                 CameraPlaceholder.Visibility = Visibility.Collapsed;
-                CameraStatusBadge.Background = new SolidColorBrush(Color.FromRgb(232, 248, 239));
-                CameraStatusText.Foreground = new SolidColorBrush(Color.FromRgb(32, 126, 78));
-                CameraStatusText.Text = _recordingBackend?.IsRecording == true ? "相机正常 · 正在录像" : "相机正常 · 实时预览";
+                var statusText = _recordingBackend?.IsRecording == true ? "相机正常 · 正在录像" : "相机正常 · 实时预览";
+                if (!string.Equals(_lastCameraStatusText, statusText, StringComparison.Ordinal))
+                {
+                    CameraStatusBadge.Background = CameraReadyBackground;
+                    CameraStatusText.Foreground = CameraReadyForeground;
+                    CameraStatusText.Text = statusText;
+                    _lastCameraStatusText = statusText;
+                }
                 UpdateCameraRuntimeInfo();
             }
             finally
@@ -284,6 +484,7 @@ public partial class MainWindow : Window
 
     private void ShowCameraError(string message)
     {
+        _lastCameraStatusText = string.Empty;
         CameraStatusBadge.Background = new SolidColorBrush(Color.FromRgb(255, 233, 233));
         CameraStatusText.Foreground = new SolidColorBrush(Color.FromRgb(182, 50, 50));
         CameraStatusText.Text = "相机不可用";
@@ -298,6 +499,12 @@ public partial class MainWindow : Window
         {
             return;
         }
+        var runtimeKey = $"{info.DisplayName}|{info.Width}|{info.Height}|{info.FramesPerSecond:0.###}";
+        if (string.Equals(_lastCameraRuntimeKey, runtimeKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+        _lastCameraRuntimeKey = runtimeKey;
         CameraNameText.Text = info.DisplayName;
         ResolutionText.Text = $"{info.Width} × {info.Height}";
         FpsText.Text = $"{info.FramesPerSecond:0.#} fps";
@@ -305,18 +512,29 @@ public partial class MainWindow : Window
 
     private async Task RefreshRecentAsync()
     {
-        if (_repository is null)
+        if (_repository is null || !await _recentRefreshGate.WaitAsync(0))
         {
             return;
         }
-        var records = (await _repository.QueryAsync(limit: 30, cancellationToken: _lifetime.Token))
-            .Where(record => record.State is RecordingState.Completed or RecordingState.Imported or RecordingState.Failed)
-            .Take(20);
-        _recentItems.Clear();
-        foreach (var record in records)
+        try
         {
-            var delivery = await _repository.GetDeliveryAsync(record.Id, "excel", _lifetime.Token);
-            _recentItems.Add(await RecentRecordingItem.CreateAsync(record, delivery));
+            var records = (await _repository.QueryAsync(limit: 30, cancellationToken: _lifetime.Token))
+                .Where(record => record.State is RecordingState.Completed or RecordingState.Imported or RecordingState.Failed)
+                .Take(20)
+                .ToArray();
+            var items = await Task.WhenAll(records.Select(async record =>
+            {
+                var delivery = await _repository.GetDeliveryAsync(record.Id, "excel", _lifetime.Token);
+                return await RecentRecordingItem.CreateAsync(record, delivery);
+            }));
+            RecentItemsControl.ItemsSource = items;
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+        }
+        finally
+        {
+            _recentRefreshGate.Release();
         }
     }
 
@@ -335,11 +553,39 @@ public partial class MainWindow : Window
                         await Dispatcher.BeginInvoke(() => SyncStatusText.Text = $"Excel：本轮处理 {processed} 条");
                     }
                 }
+                await RetryPendingVideoRenamesAsync(cancellationToken);
             }
             while (await timer.WaitForNextTickAsync(cancellationToken));
         }
         catch (OperationCanceledException)
         {
+        }
+    }
+
+    private async Task RetryPendingVideoRenamesAsync(CancellationToken cancellationToken)
+    {
+        if (_repository is null) return;
+        var records = await _repository.QueryAsync(limit: 500, cancellationToken: cancellationToken);
+        foreach (var record in records.Where(item => item.State == RecordingState.Completed && !string.IsNullOrWhiteSpace(item.VideoPath)))
+        {
+            var key = $"video-rename:{record.Id:D}";
+            if (string.IsNullOrWhiteSpace(await _repository.GetMetadataAsync(key, cancellationToken))) continue;
+            try
+            {
+                var renamed = RecordingFileRenameService.TryRenameLocalRecording(record, _settings.RecordingRoot);
+                if (!string.IsNullOrWhiteSpace(renamed))
+                {
+                    record.VideoPath = renamed;
+                    record.UpdatedAt = DateTimeOffset.Now;
+                    await _repository.UpdateAsync(record, cancellationToken);
+                    await _repository.SetMetadataAsync(key, string.Empty, cancellationToken);
+                    await _repository.EnqueueDeliveryAsync(record.Id, "excel", cancellationToken);
+                }
+            }
+            catch (IOException ex)
+            {
+                await _repository.SetMetadataAsync(key, ex.Message, cancellationToken);
+            }
         }
     }
 
@@ -349,6 +595,7 @@ public partial class MainWindow : Window
         {
             return;
         }
+        await FlushIssueNoteAsync();
         await _coordinator.EmergencyStopAsync(_lifetime.Token);
         await RefreshRecentAsync();
         ScannerInput.Focus();
@@ -571,7 +818,9 @@ public partial class MainWindow : Window
     {
         if (_repository is not null)
         {
-            new HistoryWindow(_repository) { Owner = this }.Show();
+            var history = new HistoryWindow(_repository, _settings) { Owner = this };
+            history.Closed += async (_, _) => await RefreshRecentAsync();
+            history.Show();
         }
         ScannerInput.Focus();
     }
@@ -591,6 +840,7 @@ public partial class MainWindow : Window
         await _settingsStore.SaveAsync(_settings, _lifetime.Token);
         _storageOptions!.RecordingRoot = _settings.RecordingRoot;
         _coordinator?.UpdateScannerProfile(_settings.Scanner);
+        RebuildStationRouter();
         _syncDispatcher = new SyncDispatcher(_repository!, [new ExcelConnector(CreateExcelOptions())], new SystemClock());
         ApplySettingsVisuals();
         if (_recordingBackend is not null)
@@ -729,7 +979,7 @@ public partial class MainWindow : Window
             FooterText.Text = "录像文件不存在";
             return;
         }
-        new VideoPlayerWindow(item.Record.VideoPath) { Owner = this }.Show();
+        new VideoPlayerWindow(item.Record) { Owner = this }.Show();
     }
 
     private void ApplySettingsVisuals()
@@ -750,6 +1000,159 @@ public partial class MainWindow : Window
             SelectCurrentCameraSourceChoice();
         }
         ApplyWorkflowVisuals();
+        QuickIssueTagsControl.ItemsSource = _settings.IssueTags.Where(item => item.Enabled).OrderBy(item => item.SortOrder).ToArray();
+        LabelDesigner.ConfigureIssueTags(_settings.IssueTags);
+    }
+
+    private async Task ProcessIssueBarcodeAsync(IssueBarcodeMatch match)
+    {
+        if (_coordinator?.State != RecordingState.Recording || _coordinator.CurrentRecord is null ||
+            _repository is null || _recordingBackend is null)
+        {
+            FooterText.Text = "当前没有正在录像的包裹，异常标签未添加";
+            Speak("当前没有正在录像的包裹");
+            return;
+        }
+
+        if (match.Action == IssueBarcodeAction.UndoLastTag)
+        {
+            await UndoLastIssueTagAsync();
+            return;
+        }
+
+        if (match.Tag is null)
+        {
+            return;
+        }
+        var record = _coordinator.CurrentRecord;
+        var alreadyActive = record.Tags.Any(item => item.IsActive &&
+            string.Equals(item.TagId, match.Tag.Id, StringComparison.OrdinalIgnoreCase));
+        await _repository.AddTagAsync(record.Id, match.Tag, DateTimeOffset.Now, "scanner", _lifetime.Token);
+        record.Tags = await _repository.GetTagsAsync(record.Id, false, _lifetime.Token);
+        record.UpdatedAt = DateTimeOffset.Now;
+        await _recordingBackend.UpdateIssueOverlayAsync(record.Id, record.Tags, _lifetime.Token);
+
+        if (!alreadyActive && _settings.CaptureSnapshotOnIssueTag)
+        {
+            try
+            {
+                var snapshot = await _recordingBackend.TakeSnapshotAsync(_lifetime.Token);
+                record.Snapshots = [.. record.Snapshots, snapshot];
+                await _repository.UpdateAsync(record, _lifetime.Token);
+            }
+            catch (Exception ex)
+            {
+                FooterText.Text = $"标签已保存，但自动截图失败：{ex.Message}";
+            }
+        }
+
+        UpdateIssueUi(record);
+        FooterText.Text = alreadyActive ? $"已经标记：{match.Tag.Name}" : $"已标记：{match.Tag.Name}";
+        Speak(alreadyActive ? $"已经标记{match.Tag.Name}" : $"已标记{match.Tag.Name}");
+        ScannerInput.Focus();
+    }
+
+    private async Task UndoLastIssueTagAsync()
+    {
+        if (_coordinator?.CurrentRecord is not { } record || _repository is null || _recordingBackend is null)
+        {
+            return;
+        }
+        var removed = await _repository.UndoLastTagAsync(record.Id, DateTimeOffset.Now, _lifetime.Token);
+        if (removed is null)
+        {
+            FooterText.Text = "当前录像没有可撤销的异常标签";
+            Speak("没有可撤销的异常标签");
+            return;
+        }
+        record.Tags = await _repository.GetTagsAsync(record.Id, false, _lifetime.Token);
+        await _recordingBackend.UpdateIssueOverlayAsync(record.Id, record.Tags, _lifetime.Token);
+        UpdateIssueUi(record);
+        FooterText.Text = $"已撤销标签：{removed.TagName}";
+        Speak($"已撤销{removed.TagName}");
+        ScannerInput.Focus();
+    }
+
+    private void UpdateIssueUi(ScanRecord record)
+    {
+        var active = record.Tags.Where(item => item.IsActive).OrderBy(item => item.TaggedAt).ToArray();
+        ActiveIssueSummaryText.Text = active.Length == 0
+            ? "当前没有异常标签"
+            : $"异常：{string.Join("、", active.Select(item => item.TagName))}";
+        WatermarkIssueText.Text = string.Join("\n", active.Select(item => $"异常：{item.TagName} {item.TaggedAt.LocalDateTime:HH:mm:ss}"));
+        _loadingIssueNote = true;
+        IssueNoteInput.Text = record.Note;
+        _loadingIssueNote = false;
+    }
+
+    private async void QuickIssueTagButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is IssueTagDefinition tag)
+        {
+            await ProcessIssueBarcodeAsync(new IssueBarcodeMatch(IssueBarcodeAction.AddTag, tag));
+        }
+    }
+
+    private async void UndoIssueTagButton_OnClick(object sender, RoutedEventArgs e) =>
+        await ProcessIssueBarcodeAsync(new IssueBarcodeMatch(IssueBarcodeAction.UndoLastTag));
+
+    private void IssueNoteInput_OnTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_loadingIssueNote || _coordinator?.State != RecordingState.Recording)
+        {
+            return;
+        }
+        _noteSaveTimer.Stop();
+        _noteSaveTimer.Start();
+    }
+
+    private async void SaveNoteTimer_OnTick(object? sender, EventArgs e)
+    {
+        _noteSaveTimer.Stop();
+        await SaveIssueNoteAsync();
+    }
+
+    private async Task FlushIssueNoteAsync()
+    {
+        _noteSaveTimer.Stop();
+        await SaveIssueNoteAsync();
+    }
+
+    private async Task SaveIssueNoteAsync()
+    {
+        if (_coordinator?.CurrentRecord is not { } record || _repository is null || _loadingIssueNote)
+        {
+            return;
+        }
+        var note = IssueNoteInput.Text.Trim();
+        if (string.Equals(note, record.Note, StringComparison.Ordinal))
+        {
+            return;
+        }
+        var now = DateTimeOffset.Now;
+        await _repository.UpdateNoteAsync(record.Id, note, now, _lifetime.Token);
+        record.Note = note;
+        record.NoteUpdatedAt = now;
+        FooterText.Text = "备注已保存";
+    }
+
+    private void RecordingPageButton_OnClick(object sender, RoutedEventArgs e) => ShowDesignerPage(false);
+    private void BarcodePageButton_OnClick(object sender, RoutedEventArgs e) => ShowDesignerPage(true);
+
+    private void ShowDesignerPage(bool show)
+    {
+        _designerPageVisible = show;
+        CameraToolbar.Visibility = show ? Visibility.Collapsed : Visibility.Visible;
+        RecordingWorkspace.Visibility = show ? Visibility.Collapsed : Visibility.Visible;
+        LabelDesigner.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        RecordingPageButton.Background = show ? new SolidColorBrush(Color.FromRgb(250, 251, 252)) : (Brush)FindResource("PrimaryBrush");
+        RecordingPageButton.Foreground = show ? Brushes.Black : Brushes.White;
+        BarcodePageButton.Background = show ? (Brush)FindResource("PrimaryBrush") : new SolidColorBrush(Color.FromRgb(250, 251, 252));
+        BarcodePageButton.Foreground = show ? Brushes.White : Brushes.Black;
+        if (!show)
+        {
+            ScannerInput.Focus();
+        }
     }
 
     private void ApplyWorkflowVisuals()
@@ -800,6 +1203,13 @@ public partial class MainWindow : Window
         _settings.RecordingRoot,
         _settings.Workflow == WorkflowMode.Unpacking ? "Unpacking" : "Packing");
 
+    private static Brush CreateFrozenBrush(byte red, byte green, byte blue)
+    {
+        var brush = new SolidColorBrush(Color.FromRgb(red, green, blue));
+        brush.Freeze();
+        return brush;
+    }
+
     private ExcelConnectorOptions CreateExcelOptions() => new()
     {
         WorkbookPath = _settings.ExcelWorkbookPath
@@ -814,6 +1224,74 @@ public partial class MainWindow : Window
         _speech.Speak(message, _settings.VoiceVolume);
     }
 
+    private void RebuildStationRouter()
+    {
+        if (_coordinator is null || _repository is null || _scanCommandLedger is null)
+        {
+            return;
+        }
+        _stationRouter = new StationScanCommandRouter(
+            _coordinator,
+            _repository,
+            new SystemClock(),
+            _settings.Scanner,
+            Environment.MachineName,
+            "excel",
+            _settings.IssueTags,
+            _scanCommandLedger);
+    }
+
+    private async Task<ScanAcknowledgement> RouteMobileCommandAsync(
+        ScanCommand command,
+        CancellationToken cancellationToken)
+    {
+        if (_stationRouter is null)
+        {
+            throw new InvalidOperationException("桌面录像核心尚未就绪");
+        }
+        return await Dispatcher.InvokeAsync(
+            async () =>
+            {
+                var acknowledgement = await _stationRouter.RouteAsync(command, cancellationToken);
+                ApplyMobileCommandAcknowledgement(command, acknowledgement);
+                return acknowledgement;
+            },
+            DispatcherPriority.Normal).Task.Unwrap();
+    }
+
+    private void ApplyMobileCommandAcknowledgement(ScanCommand command, ScanAcknowledgement acknowledgement)
+    {
+        if (command.Mode != DeviceOperatingMode.IssueRemote)
+        {
+            return;
+        }
+
+        if (_coordinator?.CurrentRecord is { } current)
+        {
+            UpdateIssueUi(current);
+        }
+
+        switch (acknowledgement.Action)
+        {
+            case ScanCommandAction.IssueTagged:
+            case ScanCommandAction.IssueUndone:
+            case ScanCommandAction.NoteUpdated:
+            case ScanCommandAction.SnapshotCaptured:
+            case ScanCommandAction.Rejected:
+            case ScanCommandAction.Failed:
+            case ScanCommandAction.Ignored:
+                Speak(acknowledgement.Message);
+                break;
+        }
+    }
+
+    private StationStateSnapshot GetDesktopStationState() => new(
+        Environment.MachineName,
+        _coordinator?.State ?? RecordingState.Idle,
+        _coordinator?.CurrentRecord?.Id,
+        _coordinator?.CurrentRecord?.TrackingNo,
+        DateTimeOffset.Now);
+
     private async void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         if (_allowClose)
@@ -825,6 +1303,7 @@ public partial class MainWindow : Window
         {
             return;
         }
+        await FlushIssueNoteAsync();
         if (_coordinator?.State is RecordingState.Recording or RecordingState.Starting or RecordingState.Saving)
         {
             var answer = MessageBox.Show(
@@ -841,6 +1320,12 @@ public partial class MainWindow : Window
         }
 
         _shutdownStarted = true;
+        App.Updates.UpdateReady -= Updates_OnUpdateReady;
+        _stationStateTimer.Stop();
+        if (_desktopCommandListener is not null)
+        {
+            await _desktopCommandListener.DisposeAsync();
+        }
         _lifetime.Cancel();
         _rawScanner?.Dispose();
         if (_recordingBackend is not null)

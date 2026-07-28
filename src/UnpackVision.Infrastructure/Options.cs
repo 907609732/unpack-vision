@@ -74,3 +74,24 @@ public sealed class SecurityOptions
         "UnpackVision",
         "api-key.protected");
 }
+
+public sealed class WebhookOptions
+{
+    public List<string> Endpoints { get; set; } = [];
+    public string Secret { get; set; } = string.Empty;
+    public int TimeoutSeconds { get; set; } = 10;
+}
+
+public sealed class MediaRelayOptions
+{
+    public string Version { get; set; } = "1.18.2";
+    public string ExecutablePath { get; set; } = string.Empty;
+    public string RuntimeDirectory { get; set; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        "UnpackVision",
+        "MediaMTX");
+    public string AuthHttpAddress { get; set; } = "http://127.0.0.1:5271/internal/media/auth";
+    public string ControlApiAddress { get; set; } = "http://127.0.0.1:9997";
+    public int RtspPort { get; set; } = 8554;
+    public int WebRtcPort { get; set; } = 8889;
+}

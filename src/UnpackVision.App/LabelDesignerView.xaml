@@ -1,0 +1,122 @@
+<UserControl x:Class="UnpackVision.App.LabelDesignerView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="Transparent">
+  <Border Background="#F9FFFFFF" BorderBrush="#1C000000" BorderThickness="1" CornerRadius="22"
+          Effect="{StaticResource PanelShadow}">
+    <Grid>
+      <Grid.RowDefinitions><RowDefinition Height="58"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <Border BorderBrush="#16000000" BorderThickness="0,0,0,1" Padding="14,8">
+        <Grid>
+          <StackPanel Orientation="Horizontal">
+            <ComboBox x:Name="TemplateSelector" Width="170" SelectionChanged="TemplateSelector_OnSelectionChanged"/>
+            <Button Content="新建" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0" Click="New_OnClick"/>
+            <Button Content="保存" Margin="6,0,0,0" Click="Save_OnClick"/>
+            <Button Content="导入 JSON" Style="{StaticResource SecondaryButton}" Margin="6,0,0,0" Click="ImportTemplate_OnClick"/>
+            <Button Content="导出 JSON" Style="{StaticResource SecondaryButton}" Margin="6,0,0,0" Click="ExportTemplate_OnClick"/>
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="↶" Style="{StaticResource SecondaryButton}" ToolTip="撤销" Click="Undo_OnClick"/>
+            <Button Content="↷" Style="{StaticResource SecondaryButton}" ToolTip="重做" Margin="5,0,0,0" Click="Redo_OnClick"/>
+            <Button Content="复制" Style="{StaticResource SecondaryButton}" Margin="5,0,0,0" Click="Copy_OnClick"/>
+            <Button Content="粘贴" Style="{StaticResource SecondaryButton}" Margin="5,0,0,0" Click="Paste_OnClick"/>
+            <Button Content="删除" Style="{StaticResource SecondaryButton}" Margin="5,0,0,0" Click="Delete_OnClick"/>
+            <Button Content="打印" Margin="10,0,0,0" Click="Print_OnClick"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+
+      <Grid Grid.Row="1">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="190"/><ColumnDefinition Width="*"/><ColumnDefinition Width="286"/></Grid.ColumnDefinitions>
+        <Border BorderBrush="#16000000" BorderThickness="0,0,1,0" Padding="14">
+          <StackPanel>
+            <TextBlock Text="添加元素" FontSize="16" FontWeight="SemiBold" Margin="4,2,0,12"/>
+            <UniformGrid Columns="2">
+              <Button Content="文本" Style="{StaticResource SecondaryButton}" Margin="3" Click="AddText_OnClick"/>
+              <Button Content="条形码" Style="{StaticResource SecondaryButton}" Margin="3" Click="AddCode128_OnClick"/>
+              <Button Content="二维码" Style="{StaticResource SecondaryButton}" Margin="3" Click="AddQr_OnClick"/>
+              <Button Content="图片/Logo" Style="{StaticResource SecondaryButton}" Margin="3" Click="AddImage_OnClick"/>
+              <Button Content="直线" Style="{StaticResource SecondaryButton}" Margin="3" Click="AddLine_OnClick"/>
+              <Button Content="矩形" Style="{StaticResource SecondaryButton}" Margin="3" Click="AddRectangle_OnClick"/>
+            </UniformGrid>
+            <TextBlock Text="异常指令条码" FontWeight="SemiBold" Margin="4,12,0,6"/>
+            <ComboBox x:Name="IssueCommandSelector" DisplayMemberPath="Name"/>
+            <Button Content="插入所选 Code 128" Style="{StaticResource SecondaryButton}" Margin="0,6,0,0" Click="AddIssueCommand_OnClick"/>
+            <Separator Margin="0,14"/>
+            <TextBlock Text="图层与对齐" FontWeight="SemiBold" Margin="4,0,0,8"/>
+            <UniformGrid Columns="2">
+              <Button Content="上移一层" Style="{StaticResource SecondaryButton}" Margin="3" Click="LayerUp_OnClick"/>
+              <Button Content="下移一层" Style="{StaticResource SecondaryButton}" Margin="3" Click="LayerDown_OnClick"/>
+              <Button Content="水平居中" Style="{StaticResource SecondaryButton}" Margin="3" Click="AlignCenter_OnClick"/>
+              <Button Content="垂直居中" Style="{StaticResource SecondaryButton}" Margin="3" Click="AlignMiddle_OnClick"/>
+            </UniformGrid>
+            <Separator Margin="0,14"/>
+            <TextBlock Text="批量数据" FontWeight="SemiBold" Margin="4,0,0,8"/>
+            <Button Content="导入 Excel / CSV" Style="{StaticResource SecondaryButton}" Click="ImportData_OnClick"/>
+            <TextBlock x:Name="DataSummaryText" Text="未导入数据" Foreground="{StaticResource TextSecondaryBrush}" Margin="4,8,0,0" TextWrapping="Wrap"/>
+            <StackPanel Orientation="Horizontal" Margin="0,9,0,0">
+              <Button Content="上一行" Style="{StaticResource SecondaryButton}" Padding="8,6" Click="PreviousRow_OnClick"/>
+              <Button Content="下一行" Style="{StaticResource SecondaryButton}" Padding="8,6" Margin="5,0,0,0" Click="NextRow_OnClick"/>
+            </StackPanel>
+          </StackPanel>
+        </Border>
+
+        <Grid Grid.Column="1" Background="#EEF1F5">
+          <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+            <Grid Margin="50">
+              <Border x:Name="CanvasShadow" Background="White" BorderBrush="#22000000" BorderThickness="1"
+                      Effect="{StaticResource FloatingShadow}" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Canvas x:Name="DesignCanvas" Background="White" MouseLeftButtonDown="Canvas_OnMouseLeftButtonDown"/>
+              </Border>
+            </Grid>
+          </ScrollViewer>
+          <Border VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,12" Background="#EFFFFFFF" CornerRadius="12" Padding="8,4">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="缩放" VerticalAlignment="Center" Foreground="{StaticResource TextSecondaryBrush}"/>
+              <Slider x:Name="ZoomSlider" Width="130" Minimum="0.5" Maximum="1.8" Value="1" Margin="8,0" ValueChanged="ZoomSlider_OnValueChanged"/>
+              <TextBlock x:Name="ZoomText" Text="100%" Width="42" VerticalAlignment="Center"/>
+            </StackPanel>
+          </Border>
+        </Grid>
+
+        <ScrollViewer Grid.Column="2" VerticalScrollBarVisibility="Auto" BorderBrush="#16000000" BorderThickness="1,0,0,0">
+          <StackPanel Margin="16">
+            <TextBlock Text="标签与打印" FontSize="16" FontWeight="SemiBold" Margin="0,2,0,12"/>
+            <TextBlock Text="模板名称"/><TextBox x:Name="TemplateNameInput" Margin="0,5,0,10" TextChanged="TemplateProperty_OnChanged"/>
+            <TextBlock Text="尺寸（毫米）"/>
+            <ComboBox x:Name="SizePresetSelector" Margin="0,5,0,8" SelectionChanged="SizePresetSelector_OnSelectionChanged">
+              <ComboBoxItem Content="50 × 30 mm" Tag="50,30"/><ComboBoxItem Content="60 × 40 mm" Tag="60,40"/><ComboBoxItem Content="自定义" Tag="custom"/>
+            </ComboBox>
+            <UniformGrid Columns="2">
+              <StackPanel Margin="0,0,4,0"><TextBlock Text="宽"/><TextBox x:Name="WidthInput" TextChanged="TemplateProperty_OnChanged"/></StackPanel>
+              <StackPanel Margin="4,0,0,0"><TextBlock Text="高"/><TextBox x:Name="HeightInput" TextChanged="TemplateProperty_OnChanged"/></StackPanel>
+            </UniformGrid>
+            <TextBlock Text="打印偏移（毫米）" Margin="0,10,0,4"/>
+            <UniformGrid Columns="2">
+              <StackPanel Margin="0,0,4,0"><TextBlock Text="横向"/><TextBox x:Name="OffsetXInput" TextChanged="TemplateProperty_OnChanged"/></StackPanel>
+              <StackPanel Margin="4,0,0,0"><TextBlock Text="纵向"/><TextBox x:Name="OffsetYInput" TextChanged="TemplateProperty_OnChanged"/></StackPanel>
+            </UniformGrid>
+            <Separator Margin="0,15"/>
+            <TextBlock Text="选中元素" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
+            <TextBlock Text="内容"/><TextBox x:Name="ElementContentInput" Margin="0,5,0,9" TextChanged="ElementProperty_OnChanged"/>
+            <TextBlock Text="绑定字段"/><ComboBox x:Name="DataFieldSelector" Margin="0,5,0,9" SelectionChanged="ElementProperty_OnChanged"/>
+            <UniformGrid Columns="2">
+              <StackPanel Margin="0,0,4,0"><TextBlock Text="X"/><TextBox x:Name="ElementXInput" TextChanged="ElementProperty_OnChanged"/></StackPanel>
+              <StackPanel Margin="4,0,0,0"><TextBlock Text="Y"/><TextBox x:Name="ElementYInput" TextChanged="ElementProperty_OnChanged"/></StackPanel>
+              <StackPanel Margin="0,8,4,0"><TextBlock Text="宽"/><TextBox x:Name="ElementWidthInput" TextChanged="ElementProperty_OnChanged"/></StackPanel>
+              <StackPanel Margin="4,8,0,0"><TextBlock Text="高"/><TextBox x:Name="ElementHeightInput" TextChanged="ElementProperty_OnChanged"/></StackPanel>
+            </UniformGrid>
+            <TextBlock Text="旋转角度" Margin="0,9,0,4"/><TextBox x:Name="RotationInput" TextChanged="ElementProperty_OnChanged"/>
+            <TextBlock Text="字号" Margin="0,9,0,4"/><TextBox x:Name="FontSizeInput" TextChanged="ElementProperty_OnChanged"/>
+            <CheckBox x:Name="HumanReadableCheck" Content="条码显示可读文字" Margin="0,10,0,0" Checked="ElementProperty_OnChanged" Unchecked="ElementProperty_OnChanged"/>
+            <Separator Margin="0,15"/>
+            <TextBlock Text="打印范围" FontWeight="SemiBold"/>
+            <TextBlock Text="起始行 / 结束行（留空为全部）" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,5,0,4"/>
+            <UniformGrid Columns="2"><TextBox x:Name="StartRowInput" Margin="0,0,4,0"/><TextBox x:Name="EndRowInput" Margin="4,0,0,0"/></UniformGrid>
+            <TextBlock Text="每行份数" Margin="0,9,0,4"/><TextBox x:Name="CopiesInput" Text="1"/>
+          </StackPanel>
+        </ScrollViewer>
+      </Grid>
+    </Grid>
+  </Border>
+</UserControl>

@@ -12,6 +12,8 @@ internal sealed class FakeRecordingBackend(string outputRoot) : IRecordingBacken
     public int StartCount { get; private set; }
     public int StopCount { get; private set; }
     public bool FailStart { get; set; }
+    public int SnapshotCount { get; private set; }
+    public IReadOnlyList<RecordTagAssignment> OverlayTags { get; private set; } = [];
 
     public Task<RecordingSession> StartAsync(
         Guid recordId,
@@ -40,6 +42,19 @@ internal sealed class FakeRecordingBackend(string outputRoot) : IRecordingBacken
     }
 
     public Task AbortAsync(RecordingSession session, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task UpdateIssueOverlayAsync(Guid recordId, IReadOnlyList<RecordTagAssignment> activeTags, CancellationToken cancellationToken = default)
+    {
+        OverlayTags = activeTags.ToArray();
+        return Task.CompletedTask;
+    }
+    public Task<string> TakeSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        SnapshotCount++;
+        Directory.CreateDirectory(outputRoot);
+        var path = Path.Combine(outputRoot, $"snapshot-{SnapshotCount}.jpg");
+        File.WriteAllBytes(path, [4, 5, 6]);
+        return Task.FromResult(path);
+    }
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
@@ -74,11 +89,76 @@ internal sealed class InMemoryRepository : IScanRecordRepository
         Task.FromResult(Records.FirstOrDefault(record => record.Id == id));
     public Task<ScanRecord?> FindFirstCompletedAsync(string trackingNo, CancellationToken cancellationToken = default) =>
         Task.FromResult(Records.FirstOrDefault(record =>
-            record.TrackingNo == trackingNo && record.State is RecordingState.Completed or RecordingState.Imported));
+            record.TrackingNo == trackingNo && record.State is RecordingState.Completed or RecordingState.Collected or RecordingState.Imported));
     public Task<ScanRecord?> FindByVideoPathAsync(string videoPath, CancellationToken cancellationToken = default) =>
         Task.FromResult(Records.FirstOrDefault(record => string.Equals(record.VideoPath, videoPath, StringComparison.OrdinalIgnoreCase)));
     public Task<IReadOnlyList<ScanRecord>> QueryAsync(string? trackingNo = null, int limit = 200, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<ScanRecord>>(Records.Take(limit).ToList());
+    public Task<IReadOnlyList<ScanRecord>> QueryPageAsync(string? trackingNo, int offset, int limit, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<ScanRecord>>(Records
+            .Where(record => string.IsNullOrWhiteSpace(trackingNo) || record.TrackingNo.Contains(trackingNo, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(record => record.ScannedAt)
+            .Skip(Math.Max(0, offset))
+            .Take(limit)
+            .ToList());
+    public Task<int> DeleteManyAsync(IReadOnlyCollection<Guid> recordIds, CancellationToken cancellationToken = default)
+    {
+        var ids = recordIds.ToHashSet();
+        Deliveries.RemoveAll(delivery => ids.Contains(delivery.RecordId));
+        return Task.FromResult(Records.RemoveAll(record => ids.Contains(record.Id)));
+    }
+    public Task<RecordTagAssignment> AddTagAsync(Guid recordId, IssueTagDefinition tag, DateTimeOffset taggedAt, string source = "scanner", CancellationToken cancellationToken = default)
+    {
+        var record = Records.Single(item => item.Id == recordId);
+        var existing = record.Tags.FirstOrDefault(item => item.IsActive && string.Equals(item.TagId, tag.Id, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            return Task.FromResult(existing);
+        }
+        var assignment = new RecordTagAssignment
+        {
+            RecordId = recordId,
+            TagId = tag.Id,
+            TagName = tag.Name,
+            ColorHex = tag.ColorHex,
+            TaggedAt = taggedAt,
+            Source = source
+        };
+        record.Tags = [.. record.Tags, assignment];
+        return Task.FromResult(assignment);
+    }
+    public Task<RecordTagAssignment?> UndoLastTagAsync(Guid recordId, DateTimeOffset removedAt, CancellationToken cancellationToken = default)
+    {
+        var record = Records.Single(item => item.Id == recordId);
+        var assignment = record.Tags.Where(item => item.IsActive).OrderByDescending(item => item.TaggedAt).FirstOrDefault();
+        if (assignment is not null)
+        {
+            assignment.RemovedAt = removedAt;
+        }
+        return Task.FromResult(assignment);
+    }
+    public Task<RecordTagAssignment?> RemoveTagAsync(Guid recordId, Guid assignmentId, DateTimeOffset removedAt, CancellationToken cancellationToken = default)
+    {
+        var record = Records.Single(item => item.Id == recordId);
+        var assignment = record.Tags.FirstOrDefault(item => item.Id == assignmentId && item.IsActive);
+        if (assignment is not null)
+        {
+            assignment.RemovedAt = removedAt;
+        }
+        return Task.FromResult(assignment);
+    }
+    public Task UpdateNoteAsync(Guid recordId, string note, DateTimeOffset updatedAt, CancellationToken cancellationToken = default)
+    {
+        var record = Records.Single(item => item.Id == recordId);
+        record.Note = note.Trim();
+        record.NoteUpdatedAt = updatedAt;
+        return Task.CompletedTask;
+    }
+    public Task<IReadOnlyList<RecordTagAssignment>> GetTagsAsync(Guid recordId, bool includeRemoved = false, CancellationToken cancellationToken = default)
+    {
+        var tags = Records.Single(item => item.Id == recordId).Tags.Where(item => includeRemoved || item.IsActive).ToArray();
+        return Task.FromResult<IReadOnlyList<RecordTagAssignment>>(tags);
+    }
     public Task EnqueueDeliveryAsync(Guid recordId, string connectorId, CancellationToken cancellationToken = default)
     {
         Deliveries.Add(new SyncDelivery { RecordId = recordId, ConnectorId = connectorId });

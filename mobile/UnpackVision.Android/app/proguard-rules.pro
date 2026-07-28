@@ -1,0 +1,2 @@
+-keep class zxingcpp.** { *; }
+-keep class com.pedro.** { *; }

@@ -19,6 +19,18 @@ public sealed class MediaPresentationServicesTests : IDisposable
         Assert.Contains(results, result => result.Text == "STOP-RECORD-2026");
     }
 
+    [Fact]
+    public async Task GeneratedQrCodeCanBeReadLocally()
+    {
+        Directory.CreateDirectory(_root);
+        var path = Path.Combine(_root, "issue-qr.png");
+        await File.WriteAllBytesAsync(path, BarcodePresentationService.CreateQrCodePng("UV-TAG-DAMAGE01"));
+
+        var results = await new ZxingBarcodeRecognitionService().RecognizeAsync(path);
+
+        Assert.Contains(results, result => result.Text == "UV-TAG-DAMAGE01");
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

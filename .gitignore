@@ -2,6 +2,7 @@
 .dotnet-home/
 .nuget/
 .vs/
+.plastic/
 artifacts/
 **/bin/
 **/obj/
@@ -27,3 +28,11 @@ artifacts/
 settings.json
 appsettings.Local.json
 TestResults/
+**/.gradle/
+**/build/
+**/local.properties
+**/.idea/
+*.jks
+*.keystore
+*.pem
+tools/mediamtx/

@@ -31,6 +31,31 @@ public static class BarcodePresentationService
         Cv2.ImEncode(".png", bgr, out var encoded);
         return encoded;
     }
+
+    public static byte[] CreateQrCodePng(string value, int size = 420)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return [];
+        }
+        var writer = new BarcodeWriterPixelData
+        {
+            Format = BarcodeFormat.QR_CODE,
+            Options = new EncodingOptions
+            {
+                Width = size,
+                Height = size,
+                Margin = 2,
+                PureBarcode = true
+            }
+        };
+        var pixels = writer.Write(value);
+        using var bgra = Mat.FromPixelData(pixels.Height, pixels.Width, MatType.CV_8UC4, pixels.Pixels);
+        using var bgr = new Mat();
+        Cv2.CvtColor(bgra, bgr, ColorConversionCodes.BGRA2BGR);
+        Cv2.ImEncode(".png", bgr, out var encoded);
+        return encoded;
+    }
 }
 
 public static class VideoPresentationService

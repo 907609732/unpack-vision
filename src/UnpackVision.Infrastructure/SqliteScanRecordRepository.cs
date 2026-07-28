@@ -45,9 +45,12 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
                 station_id TEXT NOT NULL,
                 duplicate_of TEXT NULL,
                 platform_match_status TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                note_updated_at TEXT NULL,
                 failure_reason TEXT NULL,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                deleted_at TEXT NULL
             );
 
             CREATE INDEX IF NOT EXISTS ix_scan_records_tracking_no
@@ -73,12 +76,32 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
             CREATE INDEX IF NOT EXISTS ix_sync_deliveries_due
                 ON sync_deliveries(status, next_retry_at);
 
+            CREATE TABLE IF NOT EXISTS record_tags (
+                id TEXT PRIMARY KEY,
+                record_id TEXT NOT NULL,
+                tag_id TEXT NOT NULL,
+                tag_name TEXT NOT NULL,
+                color_hex TEXT NOT NULL,
+                tagged_at TEXT NOT NULL,
+                removed_at TEXT NULL,
+                source TEXT NOT NULL,
+                FOREIGN KEY(record_id) REFERENCES scan_records(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_record_tags_record
+                ON record_tags(record_id, tagged_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_record_tags_active
+                ON record_tags(record_id, tag_id) WHERE removed_at IS NULL;
+
             CREATE TABLE IF NOT EXISTS metadata (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
             """;
         await command.ExecuteNonQueryAsync(cancellationToken);
+        await EnsureDeletedAtColumnAsync(connection, cancellationToken);
+        await EnsureColumnAsync(connection, "scan_records", "note", "TEXT NOT NULL DEFAULT ''", cancellationToken);
+        await EnsureColumnAsync(connection, "scan_records", "note_updated_at", "TEXT NULL", cancellationToken);
     }
 
     public async Task AddAsync(ScanRecord record, CancellationToken cancellationToken = default)
@@ -133,12 +156,12 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
                 id, tracking_no, workflow, state, scanned_at,
                 recording_started_at, recording_ended_at, video_path,
                 snapshots_json, camera_id, station_id, duplicate_of,
-                platform_match_status, failure_reason, created_at, updated_at)
+                platform_match_status, note, note_updated_at, failure_reason, created_at, updated_at)
             VALUES (
                 $id, $trackingNo, $workflow, $state, $scannedAt,
                 $recordingStartedAt, $recordingEndedAt, $videoPath,
                 $snapshotsJson, $cameraId, $stationId, $duplicateOf,
-                $platformMatchStatus, $failureReason, $createdAt, $updatedAt);
+                $platformMatchStatus, $note, $noteUpdatedAt, $failureReason, $createdAt, $updatedAt);
             """;
         BindRecord(command, record);
         return command;
@@ -176,22 +199,24 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
                 station_id=$stationId,
                 duplicate_of=$duplicateOf,
                 platform_match_status=$platformMatchStatus,
+                note=$note,
+                note_updated_at=$noteUpdatedAt,
                 failure_reason=$failureReason,
                 updated_at=$updatedAt
-            WHERE id=$id;
+            WHERE id=$id AND deleted_at IS NULL;
             """;
         BindRecord(command, record);
         return command;
     }
 
     public async Task<ScanRecord?> GetAsync(Guid id, CancellationToken cancellationToken = default) =>
-        await QuerySingleAsync("WHERE id=$value", id.ToString("D"), cancellationToken);
+        await QuerySingleAsync("WHERE id=$value AND deleted_at IS NULL", id.ToString("D"), cancellationToken);
 
     public async Task<ScanRecord?> FindFirstCompletedAsync(
         string trackingNo,
         CancellationToken cancellationToken = default) =>
         await QuerySingleAsync(
-            "WHERE tracking_no=$value AND state IN ('Completed','Imported') ORDER BY scanned_at LIMIT 1",
+            "WHERE tracking_no=$value AND state IN ('Completed','Collected','Imported') AND deleted_at IS NULL ORDER BY scanned_at LIMIT 1",
             trackingNo,
             cancellationToken);
 
@@ -203,15 +228,24 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
     public async Task<IReadOnlyList<ScanRecord>> QueryAsync(
         string? trackingNo = null,
         int limit = 200,
+        CancellationToken cancellationToken = default) =>
+        await QueryPageAsync(trackingNo, 0, limit, cancellationToken);
+
+    public async Task<IReadOnlyList<ScanRecord>> QueryPageAsync(
+        string? trackingNo,
+        int offset,
+        int limit,
         CancellationToken cancellationToken = default)
     {
+        offset = Math.Max(0, offset);
         limit = Math.Clamp(limit, 1, 2000);
         await using var connection = await OpenAsync(cancellationToken);
         var command = connection.CreateCommand();
         command.CommandText = string.IsNullOrWhiteSpace(trackingNo)
-            ? "SELECT * FROM scan_records ORDER BY scanned_at DESC LIMIT $limit"
-            : "SELECT * FROM scan_records WHERE tracking_no LIKE $tracking ORDER BY scanned_at DESC LIMIT $limit";
+            ? "SELECT * FROM scan_records WHERE deleted_at IS NULL ORDER BY scanned_at DESC, id DESC LIMIT $limit OFFSET $offset"
+            : "SELECT * FROM scan_records WHERE deleted_at IS NULL AND tracking_no LIKE $tracking ORDER BY scanned_at DESC, id DESC LIMIT $limit OFFSET $offset";
         command.Parameters.AddWithValue("$limit", limit);
+        command.Parameters.AddWithValue("$offset", offset);
         if (!string.IsNullOrWhiteSpace(trackingNo))
         {
             command.Parameters.AddWithValue("$tracking", $"%{trackingNo.Trim()}%");
@@ -223,7 +257,208 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
         {
             records.Add(ReadRecord(reader));
         }
+        await reader.DisposeAsync();
+        await AttachTagsAsync(connection, records, false, cancellationToken);
         return records;
+    }
+
+    public async Task<RecordTagAssignment> AddTagAsync(
+        Guid recordId,
+        IssueTagDefinition tag,
+        DateTimeOffset taggedAt,
+        string source = "scanner",
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tag.Id);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tag.Name);
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        var assignment = new RecordTagAssignment
+        {
+            RecordId = recordId,
+            TagId = tag.Id,
+            TagName = tag.Name.Trim(),
+            ColorHex = tag.ColorHex,
+            TaggedAt = taggedAt,
+            Source = string.IsNullOrWhiteSpace(source) ? "scanner" : source.Trim()
+        };
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                INSERT INTO record_tags(id, record_id, tag_id, tag_name, color_hex, tagged_at, removed_at, source)
+                VALUES($id, $recordId, $tagId, $tagName, $colorHex, $taggedAt, NULL, $source)
+                ON CONFLICT(record_id, tag_id) WHERE removed_at IS NULL DO NOTHING;
+                """;
+            BindTag(insert, assignment);
+            await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await TouchRecordAsync(connection, transaction, recordId, taggedAt, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        var active = (await GetTagsAsync(recordId, false, cancellationToken))
+            .FirstOrDefault(item => string.Equals(item.TagId, tag.Id, StringComparison.OrdinalIgnoreCase));
+        return active ?? assignment;
+    }
+
+    public async Task<RecordTagAssignment?> UndoLastTagAsync(
+        Guid recordId,
+        DateTimeOffset removedAt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        RecordTagAssignment? assignment;
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = """
+                SELECT * FROM record_tags
+                WHERE record_id=$recordId AND removed_at IS NULL
+                ORDER BY tagged_at DESC LIMIT 1;
+                """;
+            select.Parameters.AddWithValue("$recordId", recordId.ToString("D"));
+            await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+            assignment = await reader.ReadAsync(cancellationToken) ? ReadTag(reader) : null;
+        }
+        if (assignment is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return null;
+        }
+        await using (var update = connection.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = "UPDATE record_tags SET removed_at=$removedAt WHERE id=$id AND removed_at IS NULL;";
+            update.Parameters.AddWithValue("$id", assignment.Id.ToString("D"));
+            update.Parameters.AddWithValue("$removedAt", Format(removedAt));
+            await update.ExecuteNonQueryAsync(cancellationToken);
+        }
+        assignment.RemovedAt = removedAt;
+        await TouchRecordAsync(connection, transaction, recordId, removedAt, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return assignment;
+    }
+
+    public async Task<RecordTagAssignment?> RemoveTagAsync(
+        Guid recordId,
+        Guid assignmentId,
+        DateTimeOffset removedAt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        RecordTagAssignment? assignment;
+        await using (var select = connection.CreateCommand())
+        {
+            select.Transaction = transaction;
+            select.CommandText = "SELECT * FROM record_tags WHERE id=$id AND record_id=$recordId AND removed_at IS NULL LIMIT 1;";
+            select.Parameters.AddWithValue("$id", assignmentId.ToString("D"));
+            select.Parameters.AddWithValue("$recordId", recordId.ToString("D"));
+            await using var reader = await select.ExecuteReaderAsync(cancellationToken);
+            assignment = await reader.ReadAsync(cancellationToken) ? ReadTag(reader) : null;
+        }
+        if (assignment is null)
+        {
+            await transaction.RollbackAsync(cancellationToken);
+            return null;
+        }
+        await using (var update = connection.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = "UPDATE record_tags SET removed_at=$removedAt WHERE id=$id AND removed_at IS NULL;";
+            update.Parameters.AddWithValue("$id", assignmentId.ToString("D"));
+            update.Parameters.AddWithValue("$removedAt", Format(removedAt));
+            await update.ExecuteNonQueryAsync(cancellationToken);
+        }
+        assignment.RemovedAt = removedAt;
+        await TouchRecordAsync(connection, transaction, recordId, removedAt, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return assignment;
+    }
+
+    public async Task UpdateNoteAsync(
+        Guid recordId,
+        string note,
+        DateTimeOffset updatedAt,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE scan_records
+            SET note=$note, note_updated_at=$updatedAt, updated_at=$updatedAt
+            WHERE id=$id AND deleted_at IS NULL;
+            """;
+        command.Parameters.AddWithValue("$id", recordId.ToString("D"));
+        command.Parameters.AddWithValue("$note", (note ?? string.Empty).Trim());
+        command.Parameters.AddWithValue("$updatedAt", Format(updatedAt));
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            throw new InvalidOperationException($"扫描记录 {recordId} 不存在");
+        }
+    }
+
+    public async Task<IReadOnlyList<RecordTagAssignment>> GetTagsAsync(
+        Guid recordId,
+        bool includeRemoved = false,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        return await LoadTagsAsync(connection, [recordId], includeRemoved, cancellationToken);
+    }
+
+    public async Task<int> DeleteManyAsync(
+        IReadOnlyCollection<Guid> recordIds,
+        CancellationToken cancellationToken = default)
+    {
+        var ids = recordIds.Distinct().Take(2000).ToArray();
+        if (ids.Length == 0)
+        {
+            return 0;
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        var parameters = string.Join(",", ids.Select((_, index) => $"$id{index}"));
+        var now = Format(DateTimeOffset.Now);
+
+        await using (var detachDuplicates = connection.CreateCommand())
+        {
+            detachDuplicates.Transaction = transaction;
+            detachDuplicates.CommandText = $"""
+                UPDATE scan_records
+                SET duplicate_of=NULL, updated_at=$now
+                WHERE deleted_at IS NULL AND duplicate_of IN ({parameters});
+                """;
+            AddIdParameters(detachDuplicates, ids);
+            detachDuplicates.Parameters.AddWithValue("$now", now);
+            await detachDuplicates.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var deleteDeliveries = connection.CreateCommand())
+        {
+            deleteDeliveries.Transaction = transaction;
+            deleteDeliveries.CommandText = $"DELETE FROM sync_deliveries WHERE record_id IN ({parameters});";
+            AddIdParameters(deleteDeliveries, ids);
+            await deleteDeliveries.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        int affected;
+        await using (var deleteRecords = connection.CreateCommand())
+        {
+            deleteRecords.Transaction = transaction;
+            deleteRecords.CommandText = $"""
+                UPDATE scan_records
+                SET deleted_at=$now, updated_at=$now
+                WHERE deleted_at IS NULL AND id IN ({parameters});
+                """;
+            AddIdParameters(deleteRecords, ids);
+            deleteRecords.Parameters.AddWithValue("$now", now);
+            affected = await deleteRecords.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return affected;
     }
 
     public async Task EnqueueDeliveryAsync(
@@ -250,7 +485,9 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
                 id, record_id, connector_id, status, attempt_count,
                 external_id, last_error, next_retry_at, created_at, updated_at)
             VALUES ($id, $recordId, $connectorId, 'Pending', 0, NULL, NULL, $now, $now, $now)
-            ON CONFLICT(record_id, connector_id) DO NOTHING;
+            ON CONFLICT(record_id, connector_id) DO UPDATE SET
+                status='Pending', last_error=NULL, next_retry_at=excluded.next_retry_at,
+                updated_at=excluded.updated_at;
             """;
         command.Parameters.AddWithValue("$id", Guid.NewGuid().ToString("D"));
         command.Parameters.AddWithValue("$recordId", recordId.ToString("D"));
@@ -381,7 +618,13 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
         command.CommandText = $"SELECT * FROM scan_records {whereClause}";
         command.Parameters.AddWithValue("$value", value);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        return await reader.ReadAsync(cancellationToken) ? ReadRecord(reader) : null;
+        var record = await reader.ReadAsync(cancellationToken) ? ReadRecord(reader) : null;
+        await reader.DisposeAsync();
+        if (record is not null)
+        {
+            await AttachTagsAsync(connection, [record], false, cancellationToken);
+        }
+        return record;
     }
 
     private async Task UpdateDeliveryAsync(
@@ -419,6 +662,141 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
         return connection;
     }
 
+    private static async Task EnsureDeletedAtColumnAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var inspect = connection.CreateCommand();
+        inspect.CommandText = "PRAGMA table_info(scan_records);";
+        await using var reader = await inspect.ExecuteReaderAsync(cancellationToken);
+        var exists = false;
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (string.Equals(reader.GetString(1), "deleted_at", StringComparison.OrdinalIgnoreCase))
+            {
+                exists = true;
+                break;
+            }
+        }
+        await reader.DisposeAsync();
+        if (exists)
+        {
+            return;
+        }
+
+        await using var migrate = connection.CreateCommand();
+        migrate.CommandText = "ALTER TABLE scan_records ADD COLUMN deleted_at TEXT NULL;";
+        await migrate.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task EnsureColumnAsync(
+        SqliteConnection connection,
+        string table,
+        string column,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        await using var inspect = connection.CreateCommand();
+        inspect.CommandText = $"PRAGMA table_info({table});";
+        await using var reader = await inspect.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+        await reader.DisposeAsync();
+        await using var migrate = connection.CreateCommand();
+        migrate.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition};";
+        await migrate.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task TouchRecordAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        Guid recordId,
+        DateTimeOffset updatedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "UPDATE scan_records SET updated_at=$updatedAt WHERE id=$id AND deleted_at IS NULL;";
+        command.Parameters.AddWithValue("$id", recordId.ToString("D"));
+        command.Parameters.AddWithValue("$updatedAt", Format(updatedAt));
+        if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
+        {
+            throw new InvalidOperationException($"扫描记录 {recordId} 不存在");
+        }
+    }
+
+    private static async Task AttachTagsAsync(
+        SqliteConnection connection,
+        IReadOnlyList<ScanRecord> records,
+        bool includeRemoved,
+        CancellationToken cancellationToken)
+    {
+        if (records.Count == 0)
+        {
+            return;
+        }
+        var tags = await LoadTagsAsync(connection, records.Select(item => item.Id).ToArray(), includeRemoved, cancellationToken);
+        var byRecord = tags.GroupBy(item => item.RecordId).ToDictionary(group => group.Key, group => (IReadOnlyList<RecordTagAssignment>)group.ToArray());
+        foreach (var record in records)
+        {
+            record.Tags = byRecord.GetValueOrDefault(record.Id) ?? [];
+        }
+    }
+
+    private static async Task<IReadOnlyList<RecordTagAssignment>> LoadTagsAsync(
+        SqliteConnection connection,
+        IReadOnlyList<Guid> recordIds,
+        bool includeRemoved,
+        CancellationToken cancellationToken)
+    {
+        if (recordIds.Count == 0)
+        {
+            return [];
+        }
+        await using var command = connection.CreateCommand();
+        var parameters = string.Join(",", recordIds.Select((_, index) => $"$tagRecord{index}"));
+        command.CommandText = $"""
+            SELECT * FROM record_tags
+            WHERE record_id IN ({parameters}) {(includeRemoved ? string.Empty : "AND removed_at IS NULL")}
+            ORDER BY tagged_at;
+            """;
+        for (var index = 0; index < recordIds.Count; index++)
+        {
+            command.Parameters.AddWithValue($"$tagRecord{index}", recordIds[index].ToString("D"));
+        }
+        var tags = new List<RecordTagAssignment>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            tags.Add(ReadTag(reader));
+        }
+        return tags;
+    }
+
+    private static void BindTag(SqliteCommand command, RecordTagAssignment tag)
+    {
+        command.Parameters.AddWithValue("$id", tag.Id.ToString("D"));
+        command.Parameters.AddWithValue("$recordId", tag.RecordId.ToString("D"));
+        command.Parameters.AddWithValue("$tagId", tag.TagId);
+        command.Parameters.AddWithValue("$tagName", tag.TagName);
+        command.Parameters.AddWithValue("$colorHex", tag.ColorHex);
+        command.Parameters.AddWithValue("$taggedAt", Format(tag.TaggedAt));
+        command.Parameters.AddWithValue("$source", tag.Source);
+    }
+
+    private static void AddIdParameters(SqliteCommand command, IReadOnlyList<Guid> ids)
+    {
+        for (var index = 0; index < ids.Count; index++)
+        {
+            command.Parameters.AddWithValue($"$id{index}", ids[index].ToString("D"));
+        }
+    }
+
     private static void BindRecord(SqliteCommand command, ScanRecord record)
     {
         command.Parameters.AddWithValue("$id", record.Id.ToString("D"));
@@ -434,6 +812,8 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
         command.Parameters.AddWithValue("$stationId", record.StationId);
         command.Parameters.AddWithValue("$duplicateOf", Db(record.DuplicateOf?.ToString("D")));
         command.Parameters.AddWithValue("$platformMatchStatus", record.PlatformMatchStatus);
+        command.Parameters.AddWithValue("$note", record.Note ?? string.Empty);
+        command.Parameters.AddWithValue("$noteUpdatedAt", Db(record.NoteUpdatedAt));
         command.Parameters.AddWithValue("$failureReason", Db(record.FailureReason));
         command.Parameters.AddWithValue("$createdAt", Format(record.CreatedAt));
         command.Parameters.AddWithValue("$updatedAt", Format(record.UpdatedAt));
@@ -454,9 +834,23 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
         StationId = reader.GetString(reader.GetOrdinal("station_id")),
         DuplicateOf = ReadGuid(reader, "duplicate_of"),
         PlatformMatchStatus = reader.GetString(reader.GetOrdinal("platform_match_status")),
+        Note = reader.GetString(reader.GetOrdinal("note")),
+        NoteUpdatedAt = ReadDate(reader, "note_updated_at"),
         FailureReason = ReadString(reader, "failure_reason"),
         CreatedAt = Parse(reader.GetString(reader.GetOrdinal("created_at"))),
         UpdatedAt = Parse(reader.GetString(reader.GetOrdinal("updated_at")))
+    };
+
+    private static RecordTagAssignment ReadTag(SqliteDataReader reader) => new()
+    {
+        Id = Guid.Parse(reader.GetString(reader.GetOrdinal("id"))),
+        RecordId = Guid.Parse(reader.GetString(reader.GetOrdinal("record_id"))),
+        TagId = reader.GetString(reader.GetOrdinal("tag_id")),
+        TagName = reader.GetString(reader.GetOrdinal("tag_name")),
+        ColorHex = reader.GetString(reader.GetOrdinal("color_hex")),
+        TaggedAt = Parse(reader.GetString(reader.GetOrdinal("tagged_at"))),
+        RemovedAt = ReadDate(reader, "removed_at"),
+        Source = reader.GetString(reader.GetOrdinal("source"))
     };
 
     private static SyncDelivery ReadDelivery(SqliteDataReader reader) => new()

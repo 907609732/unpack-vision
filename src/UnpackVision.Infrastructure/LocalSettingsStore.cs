@@ -17,6 +17,9 @@ public sealed class LocalSettings
     public bool VoiceEnabled { get; set; } = true;
     public int VoiceVolume { get; set; } = 100;
     public bool FaceZoomEnabled { get; set; }
+    public bool CaptureSnapshotOnIssueTag { get; set; }
+    public bool AutoCheckUpdates { get; set; } = true;
+    public List<IssueTagDefinition> IssueTags { get; set; } = IssueTagDefaults.Create();
 }
 
 public sealed class LocalSettingsStore
@@ -46,6 +49,10 @@ public sealed class LocalSettingsStore
         await using var stream = File.OpenRead(Path);
         var settings = await JsonSerializer.DeserializeAsync<LocalSettings>(stream, SerializerOptions, cancellationToken)
             ?? new LocalSettings();
+        if (settings.IssueTags is null || settings.IssueTags.Count == 0)
+        {
+            settings.IssueTags = IssueTagDefaults.Create();
+        }
         if (settings.Scanner.MinimumLength == 6 &&
             settings.Scanner.MaximumLength == 40 &&
             settings.Scanner.DebounceMilliseconds == 80)

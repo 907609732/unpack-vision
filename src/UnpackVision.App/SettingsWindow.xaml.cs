@@ -1,7 +1,12 @@
+using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using UnpackVision.Infrastructure;
+using UnpackVision.Core;
 
 namespace UnpackVision.App;
 
@@ -9,11 +14,12 @@ public partial class SettingsWindow : Window
 {
     private readonly LocalSettings _source;
     private readonly LoudSpeechService _speechTest = new();
+    private readonly ObservableCollection<IssueTagDefinition> _issueTags = [];
 
     public SettingsWindow(LocalSettings settings, bool showCameraTab = false)
     {
         InitializeComponent();
-        Closed += (_, _) => _speechTest.Dispose();
+        Closed += SettingsWindow_OnClosed;
         _source = settings;
         RecordingRootInput.Text = settings.RecordingRoot;
         ExcelPathInput.Text = settings.ExcelWorkbookPath;
@@ -59,6 +65,20 @@ public partial class SettingsWindow : Window
         FilterSuffixCheck.IsChecked = settings.Scanner.FilterSuffixEnabled;
         SuffixInput.Text = settings.Scanner.SuffixToRemove;
         DebounceInput.Text = settings.Scanner.DebounceMilliseconds.ToString();
+        CaptureIssueSnapshotCheck.IsChecked = settings.CaptureSnapshotOnIssueTag;
+        AutoUpdateCheck.IsChecked = settings.AutoCheckUpdates;
+        AboutVersionText.Text = $"版本 {ProductInfo.Version}";
+        RepositoryUrlText.Text = ProductInfo.RepositoryUrl;
+        AndroidDownloadUrlText.Text = ProductInfo.AndroidDownloadUrl;
+        AndroidDownloadQr.Source = ToBitmapImage(
+            BarcodePresentationService.CreateQrCodePng(ProductInfo.AndroidDownloadUrl, 360));
+        App.Updates.StatusChanged += Updates_OnStatusChanged;
+        RenderUpdateStatus(App.Updates.Status);
+        foreach (var tag in settings.IssueTags.OrderBy(item => item.SortOrder))
+        {
+            _issueTags.Add(tag with { });
+        }
+        IssueTagsGrid.ItemsSource = _issueTags;
         UpdateCameraSourceFields();
         if (showCameraTab)
         {
@@ -67,6 +87,16 @@ public partial class SettingsWindow : Window
     }
 
     public LocalSettings? SavedSettings { get; private set; }
+
+    private void OpenDevicePairing_OnClick(object sender, RoutedEventArgs e)
+    {
+        new DevicePairingWindow { Owner = this }.ShowDialog();
+    }
+
+    private void OpenPairedDevices_OnClick(object sender, RoutedEventArgs e)
+    {
+        new PairedDevicesWindow { Owner = this }.ShowDialog();
+    }
 
     private void BrowseRecordingRoot_OnClick(object sender, RoutedEventArgs e)
     {
@@ -105,6 +135,9 @@ public partial class SettingsWindow : Window
                 VoiceEnabled = VoiceCheck.IsChecked == true,
                 VoiceVolume = (int)Math.Round(VoiceVolumeSlider.Value),
                 FaceZoomEnabled = _source.FaceZoomEnabled,
+                CaptureSnapshotOnIssueTag = CaptureIssueSnapshotCheck.IsChecked == true,
+                AutoCheckUpdates = AutoUpdateCheck.IsChecked == true,
+                IssueTags = ValidateIssueTags(),
                 Scanner = _source.Scanner with
                 {
                     MinimumLength = minimum,
@@ -150,6 +183,109 @@ public partial class SettingsWindow : Window
     }
 
     private void Cancel_OnClick(object sender, RoutedEventArgs e) => DialogResult = false;
+
+    private async void CheckUpdate_OnClick(object sender, RoutedEventArgs e) =>
+        await App.Updates.CheckAndDownloadAsync(force: true);
+
+    private async void InstallUpdate_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (Owner is MainWindow mainWindow)
+        {
+            await mainWindow.TryApplyUpdateAsync();
+        }
+    }
+
+    private void OpenProductLink_OnClick(object sender, RoutedEventArgs e)
+    {
+        var url = (sender as FrameworkElement)?.Tag?.ToString() switch
+        {
+            "repository" => ProductInfo.RepositoryUrl,
+            "windows" => ProductInfo.WindowsDownloadUrl,
+            "android" => ProductInfo.AndroidDownloadUrl,
+            _ => ProductInfo.LatestReleaseUrl
+        };
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+    }
+
+    private void Updates_OnStatusChanged(object? sender, DesktopUpdateStatus status) =>
+        Dispatcher.Invoke(() => RenderUpdateStatus(status));
+
+    private void RenderUpdateStatus(DesktopUpdateStatus status)
+    {
+        UpdateStatusText.Text = status.Message;
+        UpdateProgress.Visibility = status.Progress.HasValue ? Visibility.Visible : Visibility.Collapsed;
+        UpdateProgress.Value = status.Progress ?? 0;
+        InstallUpdateButton.IsEnabled = status.ReadyToInstall;
+    }
+
+    private void SettingsWindow_OnClosed(object? sender, EventArgs e)
+    {
+        App.Updates.StatusChanged -= Updates_OnStatusChanged;
+        _speechTest.Dispose();
+    }
+
+    private static BitmapImage ToBitmapImage(byte[] png)
+    {
+        using var stream = new MemoryStream(png);
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.StreamSource = stream;
+        image.EndInit();
+        image.Freeze();
+        return image;
+    }
+
+    private void AddIssueTag_OnClick(object sender, RoutedEventArgs e)
+    {
+        var id = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+        var tag = new IssueTagDefinition
+        {
+            Id = id,
+            Name = $"新标签{_issueTags.Count + 1}",
+            ColorHex = "#FF9500",
+            BarcodeValue = $"UV-TAG-{id}",
+            SortOrder = _issueTags.Count
+        };
+        _issueTags.Add(tag);
+        IssueTagsGrid.SelectedItem = tag;
+        IssueTagsGrid.ScrollIntoView(tag);
+    }
+
+    private void DeleteIssueTag_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (IssueTagsGrid.SelectedItem is IssueTagDefinition tag)
+        {
+            _issueTags.Remove(tag);
+        }
+    }
+
+    private List<IssueTagDefinition> ValidateIssueTags()
+    {
+        IssueTagsGrid.CommitEdit(DataGridEditingUnit.Cell, true);
+        IssueTagsGrid.CommitEdit(DataGridEditingUnit.Row, true);
+        var tags = _issueTags.Select((tag, index) => tag with
+        {
+            Name = tag.Name.Trim(),
+            BarcodeValue = tag.BarcodeValue.Trim(),
+            ColorHex = tag.ColorHex.Trim(),
+            SortOrder = index
+        }).ToList();
+        if (tags.Any(tag => string.IsNullOrWhiteSpace(tag.Name) || string.IsNullOrWhiteSpace(tag.BarcodeValue)))
+        {
+            throw new ArgumentException("异常标签名称和条码内容不能为空");
+        }
+        if (tags.GroupBy(tag => tag.BarcodeValue, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() > 1) ||
+            tags.Any(tag => string.Equals(tag.BarcodeValue, IssueTagDefaults.UndoBarcode, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new ArgumentException("异常标签条码必须唯一，且不能与撤销条码相同");
+        }
+        if (tags.Any(tag => !System.Text.RegularExpressions.Regex.IsMatch(tag.ColorHex, "^#[0-9A-Fa-f]{6}$")))
+        {
+            throw new ArgumentException("标签颜色必须使用 #RRGGBB 格式，例如 #FF3B30");
+        }
+        return tags;
+    }
 
     private void CameraSourceKindInput_OnSelectionChanged(object sender, SelectionChangedEventArgs e) =>
         UpdateCameraSourceFields();

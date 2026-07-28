@@ -7,11 +7,13 @@ var storageOptions = BindOptions<StorageOptions>(builder.Configuration, "Storage
 var excelOptions = BindOptions<ExcelConnectorOptions>(builder.Configuration, "Excel");
 var hikOptions = BindOptions<HikCompatibilityOptions>(builder.Configuration, "HikCompatibility");
 var securityOptions = BindOptions<SecurityOptions>(builder.Configuration, "Security");
+var webhookOptions = BindOptions<WebhookOptions>(builder.Configuration, "Webhooks");
 
 builder.Services.AddSingleton(storageOptions);
 builder.Services.AddSingleton(excelOptions);
 builder.Services.AddSingleton(hikOptions);
 builder.Services.AddSingleton(securityOptions);
+builder.Services.AddSingleton(webhookOptions);
 builder.Services.AddSingleton<IClock, SystemClock>();
 builder.Services.AddSingleton<IScanRecordRepository, SqliteScanRecordRepository>();
 builder.Services.AddSingleton<ExcelConnector>();
@@ -21,6 +23,11 @@ builder.Services.AddSingleton<HikRecordingImporter>();
 builder.Services.AddSingleton<IImageScanService, OpenCvImageScanService>();
 builder.Services.AddSingleton<IBarcodeRecognitionService, ZxingBarcodeRecognitionService>();
 builder.Services.AddSingleton<IOfflineOcrService, OfflineOcrNotConfiguredService>();
+builder.Services.AddHttpClient<WebhookEventPublisher>(client => client.Timeout = TimeSpan.FromSeconds(Math.Clamp(webhookOptions.TimeoutSeconds, 2, 60)));
+builder.Services.AddSingleton<IEventPublisher>(services => webhookOptions.Endpoints.Count == 0
+    ? new NullEventPublisher()
+    : services.GetRequiredService<WebhookEventPublisher>());
+builder.Services.AddSingleton<LocalSettingsStore>();
 builder.Services.AddSingleton(services => new ApiKeyStore(services.GetRequiredService<SecurityOptions>().ApiKeyPath));
 builder.Services.AddHostedService<HikWatcherService>();
 builder.Services.AddHostedService<SyncWorkerService>();
@@ -107,6 +114,65 @@ app.MapGet("/api/v1/records/by-tracking/{trackingNo}", async (
     IScanRecordRepository records,
     CancellationToken cancellationToken) =>
     Results.Ok(await records.QueryAsync(trackingNo, 500, cancellationToken)));
+
+app.MapGet("/api/v1/tags", async (LocalSettingsStore settingsStore, CancellationToken cancellationToken) =>
+{
+    var settings = await settingsStore.LoadAsync(cancellationToken);
+    return Results.Ok(settings.IssueTags.Where(tag => tag.Enabled).OrderBy(tag => tag.SortOrder));
+});
+
+app.MapPost("/api/v1/records/{id:guid}/tags/{tagId}", async Task<IResult> (
+    Guid id,
+    string tagId,
+    IScanRecordRepository records,
+    LocalSettingsStore settingsStore,
+    IEventPublisher events,
+    CancellationToken cancellationToken) =>
+{
+    var record = await records.GetAsync(id, cancellationToken);
+    if (record is null) return Results.NotFound();
+    var settings = await settingsStore.LoadAsync(cancellationToken);
+    var definition = settings.IssueTags.FirstOrDefault(tag => tag.Enabled && string.Equals(tag.Id, tagId, StringComparison.OrdinalIgnoreCase));
+    if (definition is null) return Results.NotFound(new { error = "异常标签不存在或已停用" });
+    await records.AddTagAsync(id, definition, DateTimeOffset.Now, "api", cancellationToken);
+    record = await records.GetAsync(id, cancellationToken) ?? record;
+    if (record.State is RecordingState.Completed or RecordingState.Imported) await records.EnqueueDeliveryAsync(id, "excel", cancellationToken);
+    await events.PublishAsync("record.tagged", record, cancellationToken);
+    return Results.Ok(record);
+});
+
+app.MapDelete("/api/v1/records/{id:guid}/tags/{assignmentId:guid}", async Task<IResult> (
+    Guid id,
+    Guid assignmentId,
+    IScanRecordRepository records,
+    IEventPublisher events,
+    CancellationToken cancellationToken) =>
+{
+    var removed = await records.RemoveTagAsync(id, assignmentId, DateTimeOffset.Now, cancellationToken);
+    if (removed is null) return Results.NotFound();
+    var record = await records.GetAsync(id, cancellationToken);
+    if (record is null) return Results.NotFound();
+    if (record.State is RecordingState.Completed or RecordingState.Imported) await records.EnqueueDeliveryAsync(id, "excel", cancellationToken);
+    await events.PublishAsync("record.tag_removed", record, cancellationToken);
+    return Results.Ok(record);
+});
+
+app.MapPut("/api/v1/records/{id:guid}/note", async Task<IResult> (
+    Guid id,
+    UpdateNoteRequest request,
+    IScanRecordRepository records,
+    IEventPublisher events,
+    CancellationToken cancellationToken) =>
+{
+    if (request.Note?.Length > 2000) return Results.BadRequest(new { error = "备注不能超过 2000 个字符" });
+    if (await records.GetAsync(id, cancellationToken) is null) return Results.NotFound();
+    await records.UpdateNoteAsync(id, request.Note ?? string.Empty, DateTimeOffset.Now, cancellationToken);
+    var record = await records.GetAsync(id, cancellationToken);
+    if (record is null) return Results.NotFound();
+    if (record.State is RecordingState.Completed or RecordingState.Imported) await records.EnqueueDeliveryAsync(id, "excel", cancellationToken);
+    await events.PublishAsync("record.note_updated", record, cancellationToken);
+    return Results.Ok(record);
+});
 
 app.MapPost("/api/v1/records", async (
     CreateRecordRequest request,
@@ -207,3 +273,4 @@ public sealed record CreateRecordRequest(
     DateTimeOffset? RecordingEndedAt = null);
 
 public sealed record BarcodeRequest(string ImagePath);
+public sealed record UpdateNoteRequest(string? Note);

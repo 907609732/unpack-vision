@@ -1,0 +1,42 @@
+<Window x:Class="UnpackVision.App.DevicePairingWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="手机配对" Width="620" Height="790" ResizeMode="NoResize"
+        Background="#F7F8FC" WindowStartupLocation="CenterOwner">
+  <Grid Margin="28">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+    <StackPanel>
+      <TextBlock Text="配对安卓手机" FontSize="26" FontWeight="SemiBold" />
+      <TextBlock Text="打开手机端“扫描二维码配对电脑”。二维码五分钟有效且只能使用一次。"
+                 Margin="0,8,0,0" Foreground="#6E7380" TextWrapping="Wrap" />
+    </StackPanel>
+    <Border Grid.Row="1" Margin="0,20,0,0" Padding="14" CornerRadius="14"
+            Background="#EAF2FF" BorderBrush="#BDD5FF" BorderThickness="1">
+      <TextBlock x:Name="StatusText" Text="正在启动工位主机…" Foreground="#235AA6" TextWrapping="Wrap" />
+    </Border>
+    <StackPanel Grid.Row="2" Margin="0,18,0,0">
+      <TextBlock Text="局域网地址（手机和电脑须在同一网段）" Foreground="#515765" />
+      <ComboBox x:Name="LanAddressBox" Margin="0,7,0,0" Height="34"
+                IsEditable="True" IsTextSearchEnabled="True" />
+    </StackPanel>
+    <Border Grid.Row="3" Width="420" Height="420" Margin="0,18,0,0"
+            HorizontalAlignment="Center" Background="White" CornerRadius="22"
+            BorderBrush="#E1E4EA" BorderThickness="1" Padding="16">
+      <Image x:Name="PairingQrImage" Stretch="Uniform" />
+    </Border>
+    <Grid Grid.Row="4" Margin="0,20,0,0">
+      <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+      <StackPanel>
+        <TextBlock x:Name="AddressText" Foreground="#6E7380" />
+        <TextBlock x:Name="ExpiryText" Margin="0,4,0,0" Foreground="#6E7380" />
+      </StackPanel>
+      <Button Grid.Column="1" Content="刷新二维码" Padding="18,9" Click="RefreshButton_OnClick" />
+    </Grid>
+  </Grid>
+</Window>

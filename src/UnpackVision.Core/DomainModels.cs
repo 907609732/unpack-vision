@@ -6,7 +6,8 @@ namespace UnpackVision.Core;
 public enum WorkflowMode
 {
     Unpacking,
-    Packing
+    Packing,
+    ScanCollection
 }
 
 public enum RecordingState
@@ -16,6 +17,7 @@ public enum RecordingState
     Recording,
     Saving,
     Completed,
+    Collected,
     Failed,
     Imported
 }
@@ -88,6 +90,9 @@ public sealed class ScanRecord
     public string StationId { get; set; } = Environment.MachineName;
     public Guid? DuplicateOf { get; set; }
     public string PlatformMatchStatus { get; set; } = "待匹配";
+    public string Note { get; set; } = string.Empty;
+    public DateTimeOffset? NoteUpdatedAt { get; set; }
+    public IReadOnlyList<RecordTagAssignment> Tags { get; set; } = [];
     public string? FailureReason { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
@@ -99,6 +104,54 @@ public sealed class ScanRecord
             ? []
             : JsonSerializer.Deserialize<string[]>(value) ?? [];
     }
+}
+
+public sealed record IssueTagDefinition
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();
+    public string Name { get; set; } = string.Empty;
+    public string ColorHex { get; set; } = "#FF9500";
+    public string BarcodeValue { get; set; } = string.Empty;
+    public bool Enabled { get; set; } = true;
+    public int SortOrder { get; set; }
+}
+
+public sealed class RecordTagAssignment
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RecordId { get; set; }
+    public string TagId { get; set; } = string.Empty;
+    public string TagName { get; set; } = string.Empty;
+    public string ColorHex { get; set; } = "#FF9500";
+    public DateTimeOffset TaggedAt { get; set; }
+    public DateTimeOffset? RemovedAt { get; set; }
+    public string Source { get; set; } = "scanner";
+    public bool IsActive => RemovedAt is null;
+}
+
+public static class IssueTagDefaults
+{
+    public const string UndoBarcode = "UV-UNDO-TAG";
+
+    public static List<IssueTagDefinition> Create() =>
+    [
+        new()
+        {
+            Id = "DAMAGE01",
+            Name = "破损",
+            ColorHex = "#FF3B30",
+            BarcodeValue = "UV-TAG-DAMAGE01",
+            SortOrder = 0
+        },
+        new()
+        {
+            Id = "SWAPPED1",
+            Name = "调包",
+            ColorHex = "#AF52DE",
+            BarcodeValue = "UV-TAG-SWAPPED1",
+            SortOrder = 1
+        }
+    ];
 }
 
 public sealed class SyncDelivery

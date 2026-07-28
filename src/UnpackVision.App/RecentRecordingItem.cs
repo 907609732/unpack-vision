@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -8,6 +9,12 @@ namespace UnpackVision.App;
 
 public sealed class RecentRecordingItem
 {
+    private const int ThumbnailCacheLimit = 64;
+    private static readonly ConcurrentDictionary<string, Task<ImageSource?>> ThumbnailCache =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentQueue<string> ThumbnailOrder = new();
+    private static readonly SemaphoreSlim ThumbnailWorkers = new(2, 2);
+
     public required ScanRecord Record { get; init; }
     public SyncDelivery? ExcelDelivery { get; init; }
     public ImageSource? Thumbnail { get; init; }
@@ -55,16 +62,62 @@ public sealed class RecentRecordingItem
         _ => Record.State.ToString()
     };
     public bool IsDuplicate => Record.DuplicateOf is not null;
+    public bool HasIssues => Record.Tags.Any(item => item.IsActive);
+    public string TagSummary => HasIssues
+        ? string.Join("、", Record.Tags.Where(item => item.IsActive).OrderBy(item => item.TaggedAt).Select(item => item.TagName))
+        : "—";
+    public string NotePreview => string.IsNullOrWhiteSpace(Record.Note) ? "—" : Record.Note;
 
     public static async Task<RecentRecordingItem> CreateAsync(ScanRecord record, SyncDelivery? excelDelivery = null)
     {
-        var bytes = await Task.Run(() => VideoPresentationService.CreateThumbnailJpeg(record.VideoPath));
         return new RecentRecordingItem
         {
             Record = record,
             ExcelDelivery = excelDelivery,
-            Thumbnail = bytes is null ? null : UiImage.FromBytes(bytes)
+            Thumbnail = await GetThumbnailAsync(record.VideoPath)
         };
+    }
+
+    private static Task<ImageSource?> GetThumbnailAsync(string? videoPath)
+    {
+        if (string.IsNullOrWhiteSpace(videoPath) || !File.Exists(videoPath))
+        {
+            return Task.FromResult<ImageSource?>(null);
+        }
+
+        var file = new FileInfo(videoPath);
+        var key = $"{file.FullName}|{file.Length}|{file.LastWriteTimeUtc.Ticks}";
+        return ThumbnailCache.GetOrAdd(key, cacheKey =>
+        {
+            ThumbnailOrder.Enqueue(cacheKey);
+            TrimThumbnailCache();
+            return CreateThumbnailAsync(file.FullName);
+        });
+    }
+
+    private static async Task<ImageSource?> CreateThumbnailAsync(string videoPath)
+    {
+        await ThumbnailWorkers.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            return await Task.Run(() =>
+            {
+                var bytes = VideoPresentationService.CreateThumbnailJpeg(videoPath);
+                return bytes is null ? null : UiImage.FromBytes(bytes);
+            }).ConfigureAwait(false);
+        }
+        finally
+        {
+            ThumbnailWorkers.Release();
+        }
+    }
+
+    private static void TrimThumbnailCache()
+    {
+        while (ThumbnailCache.Count > ThumbnailCacheLimit && ThumbnailOrder.TryDequeue(out var oldest))
+        {
+            ThumbnailCache.TryRemove(oldest, out _);
+        }
     }
 }
 

@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Threading;
+using UnpackVision.Core;
 
 namespace UnpackVision.App;
 
@@ -10,13 +11,17 @@ public partial class VideoPlayerWindow : Window
     private readonly DispatcherTimer _timer;
     private bool _playing = true;
     private bool _seeking;
+    private readonly ScanRecord _record;
 
-    public VideoPlayerWindow(string videoPath)
+    public VideoPlayerWindow(ScanRecord record)
     {
         InitializeComponent();
+        _record = record;
+        var videoPath = record.VideoPath ?? throw new ArgumentException("录像路径为空。", nameof(record));
         Title = Path.GetFileName(videoPath);
         TitleText.Text = Path.GetFileName(videoPath);
         Player.Source = new Uri(videoPath, UriKind.Absolute);
+        IssueTimelineControl.ItemsSource = record.Tags.Where(tag => tag.IsActive).OrderBy(tag => tag.TaggedAt).ToArray();
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(250), DispatcherPriority.Normal, Timer_OnTick, Dispatcher);
         Loaded += (_, _) =>
         {
@@ -77,6 +82,16 @@ public partial class VideoPlayerWindow : Window
     {
         Player.Position = TimeSpan.FromSeconds(ProgressSlider.Value);
         _seeking = false;
+    }
+
+    private void IssueMarker_OnClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not RecordTagAssignment assignment || _record.RecordingStartedAt is null) return;
+        var offset = assignment.TaggedAt - _record.RecordingStartedAt.Value;
+        Player.Position = offset < TimeSpan.Zero ? TimeSpan.Zero : offset;
+        Player.Play();
+        _playing = true;
+        PlayPauseButton.Content = "暂停";
     }
 
     private void Minimize_OnClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;

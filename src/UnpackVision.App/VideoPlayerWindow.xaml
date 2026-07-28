@@ -10,7 +10,8 @@
                   MediaOpened="Player_OnMediaOpened" MediaEnded="Player_OnMediaEnded" />
     <Border VerticalAlignment="Top" Background="#B20A0C12" Padding="16,11">
       <Grid>
-        <TextBlock x:Name="TitleText" Foreground="White" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+        <TextBox x:Name="TitleText" Style="{StaticResource SelectableText}" Foreground="White"
+                 FontWeight="SemiBold" MaxWidth="760" HorizontalAlignment="Left" />
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
           <Button Content="—" Width="38" Padding="5" Background="Transparent" Click="Minimize_OnClick" />
           <Button Content="□" Width="38" Padding="5" Background="Transparent" Click="Maximize_OnClick" />
@@ -18,17 +19,31 @@
         </StackPanel>
       </Grid>
     </Border>
-    <Border VerticalAlignment="Bottom" Background="#CC090B10" Padding="18,14">
+    <Border VerticalAlignment="Bottom" Background="#CC090B10" Padding="18,12">
       <Grid>
-        <Grid.ColumnDefinitions>
-          <ColumnDefinition Width="Auto" />
-          <ColumnDefinition Width="*" />
-          <ColumnDefinition Width="Auto" />
-        </Grid.ColumnDefinitions>
-        <Button x:Name="PlayPauseButton" Content="暂停" Width="72" Click="PlayPause_OnClick" />
-        <Slider x:Name="ProgressSlider" Grid.Column="1" Margin="16,0" Minimum="0" Maximum="1"
-                PreviewMouseDown="ProgressSlider_OnPreviewMouseDown" PreviewMouseUp="ProgressSlider_OnPreviewMouseUp" />
-        <TextBlock x:Name="TimeText" Grid.Column="2" Foreground="White" VerticalAlignment="Center" Text="00:00 / 00:00" />
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <ItemsControl x:Name="IssueTimelineControl" Margin="88,0,0,9">
+          <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+          <ItemsControl.ItemTemplate>
+            <DataTemplate>
+              <Button Tag="{Binding}" Click="IssueMarker_OnClick" Padding="10,5" Margin="0,0,7,0" Background="#D94A2727" BorderBrush="#77FF6B6B">
+                <TextBlock Foreground="White"><Run Text="异常："/><Run Text="{Binding TagName}"/><Run Text="  "/><Run Text="{Binding TaggedAt, StringFormat=HH:mm:ss}"/></TextBlock>
+              </Button>
+            </DataTemplate>
+          </ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <Grid Grid.Row="1">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+          </Grid.ColumnDefinitions>
+          <Button x:Name="PlayPauseButton" Content="暂停" Width="72" Click="PlayPause_OnClick" />
+          <Slider x:Name="ProgressSlider" Grid.Column="1" Margin="16,0" Minimum="0" Maximum="1"
+                  PreviewMouseDown="ProgressSlider_OnPreviewMouseDown" PreviewMouseUp="ProgressSlider_OnPreviewMouseUp" />
+          <TextBox x:Name="TimeText" Grid.Column="2" Style="{StaticResource SelectableText}"
+                   Foreground="White" VerticalAlignment="Center" Text="00:00 / 00:00" />
+        </Grid>
       </Grid>
     </Border>
   </Grid>

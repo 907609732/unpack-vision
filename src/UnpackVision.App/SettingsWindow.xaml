@@ -125,6 +125,119 @@
           </Grid>
         </ScrollViewer>
       </TabItem>
+      <TabItem Header="异常标签">
+        <Grid Margin="24">
+          <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+          <StackPanel>
+            <TextBlock Text="异常快捷标签" FontSize="17" FontWeight="SemiBold" />
+            <TextBlock Text="扫码时优先识别这些固定条码，不会被当成快递单号。标签改名或改色不会改变已经打印的条码。"
+                       Foreground="#7D8494" Margin="0,6,0,0" TextWrapping="Wrap" />
+            <CheckBox x:Name="CaptureIssueSnapshotCheck" Content="扫描异常标签时自动截取当前画面（首次默认关闭）" Margin="0,14,0,0" />
+          </StackPanel>
+          <DataGrid x:Name="IssueTagsGrid" Grid.Row="1" Margin="0,16,0,0" AutoGenerateColumns="False"
+                    CanUserAddRows="False" SelectionMode="Single">
+            <DataGrid.Columns>
+              <DataGridCheckBoxColumn Header="启用" Binding="{Binding Enabled}" Width="64" />
+              <DataGridTextColumn Header="名称" Binding="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="120" />
+              <DataGridTextColumn Header="颜色" Binding="{Binding ColorHex, UpdateSourceTrigger=PropertyChanged}" Width="100" />
+              <DataGridTextColumn Header="固定条码内容" Binding="{Binding BarcodeValue}" IsReadOnly="True" Width="*" />
+            </DataGrid.Columns>
+          </DataGrid>
+          <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,14,0,0">
+            <Button Content="新增标签" Click="AddIssueTag_OnClick" />
+            <Button Content="删除选中" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0" Click="DeleteIssueTag_OnClick" />
+            <TextBlock Text="固定撤销条码：UV-UNDO-TAG" Foreground="#7D8494" VerticalAlignment="Center" Margin="18,0,0,0" />
+          </StackPanel>
+        </Grid>
+      </TabItem>
+      <TabItem Header="手机协同">
+        <Grid Margin="24">
+          <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+          <TextBlock Text="安卓手机协同" FontSize="20" FontWeight="SemiBold" />
+          <TextBlock Grid.Row="1" Margin="0,10,0,0" Foreground="#7D8494" TextWrapping="Wrap"
+                     Text="手机可以充当扫码枪和摄像头；异常遥控已集成到扫码器，关闭“启动电脑录像”后可直接追加 Excel。每台设备独立授权，可随时永久删除。" />
+          <StackPanel Grid.Row="2" Margin="0,24,0,0">
+            <StackPanel Orientation="Horizontal">
+              <Button Content="显示手机配对二维码" Width="220" Padding="16,10"
+                      Click="OpenDevicePairing_OnClick" />
+              <Button Content="管理已配对设备" Width="190" Margin="10,0,0,0" Padding="16,10"
+                      Style="{StaticResource SecondaryButton}" Click="OpenPairedDevices_OnClick" />
+            </StackPanel>
+            <TextBlock Margin="0,14,0,0" Foreground="#7D8494" TextWrapping="Wrap"
+                       Text="配对二维码五分钟有效且只能使用一次。手机访问令牌由 Android Keystore 保护，电脑端数据库只保存令牌摘要。" />
+          </StackPanel>
+        </Grid>
+      </TabItem>
+      <TabItem Header="关于">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="32">
+            <TextBlock Text="电商拆包智能录像" FontSize="30" FontWeight="SemiBold" Foreground="#202124" />
+            <TextBox x:Name="AboutVersionText" Text="版本 2.1.0" Style="{StaticResource SelectableText}"
+                     Margin="0,10,0,0" FontSize="15" Foreground="#6E6E73" />
+            <Border Background="#F3F6FC" CornerRadius="16" Padding="20" Margin="0,24,0,0">
+              <StackPanel>
+                <TextBlock Text="开发者" Foreground="#7D8494" />
+                <TextBox Text="五成" Style="{StaticResource SelectableText}"
+                         FontSize="20" FontWeight="SemiBold" Margin="0,5,0,0" />
+              </StackPanel>
+            </Border>
+            <TextBox Margin="0,22,0,0" TextWrapping="Wrap" Foreground="#4A5265"
+                     Style="{StaticResource SelectableText}"
+                     Text="面向中小商家的零成本、开源拆包录像与单号同步工具。支持手机、USB 摄像头、IPC、海康录像机、Excel 和开放接口。" />
+            <TextBox Margin="0,14,0,0" TextWrapping="Wrap" Foreground="#7D8494"
+                     Style="{StaticResource SelectableText}"
+                     Text="业务数据默认完全保存在本机；更新检查只访问 GitHub，不上传单号、录像、Excel 或设备信息。首次安装未签名版本时 Windows 可能显示 SmartScreen 提示。" />
+
+            <Border Background="#F8FAFD" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="16" Padding="18" Margin="0,22,0,0">
+              <StackPanel>
+                <TextBlock Text="软件更新" FontSize="17" FontWeight="SemiBold" />
+                <CheckBox x:Name="AutoUpdateCheck" Content="自动检查并在后台下载更新" Margin="0,12,0,0" />
+                <TextBox x:Name="UpdateStatusText" Style="{StaticResource SelectableText}"
+                         TextWrapping="Wrap" Foreground="#5E6573" Margin="0,10,0,0" />
+                <ProgressBar x:Name="UpdateProgress" Height="5" Minimum="0" Maximum="100"
+                             Margin="0,10,0,0" Visibility="Collapsed" />
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                  <Button Content="立即检查更新" Padding="14,7" Click="CheckUpdate_OnClick" />
+                  <Button x:Name="InstallUpdateButton" Content="重启并安装" Padding="14,7" Margin="8,0,0,0"
+                          Style="{StaticResource SecondaryButton}" IsEnabled="False" Click="InstallUpdate_OnClick" />
+                  <Button Content="查看最新版本" Padding="14,7" Margin="8,0,0,0"
+                          Style="{StaticResource SecondaryButton}" Tag="release" Click="OpenProductLink_OnClick" />
+                  <Button Content="下载 Windows 安装器" Padding="14,7" Margin="8,0,0,0"
+                          Style="{StaticResource SecondaryButton}" Tag="windows" Click="OpenProductLink_OnClick" />
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Background="#F8FAFD" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="16" Padding="18" Margin="0,14,0,0">
+              <StackPanel>
+                <TextBlock Text="开源与下载" FontSize="17" FontWeight="SemiBold" />
+                <TextBlock Text="GitHub 开源仓库" Foreground="#7D8494" Margin="0,12,0,0" />
+                <DockPanel Margin="0,5,0,0">
+                  <Button DockPanel.Dock="Right" Content="打开" Padding="12,5" Margin="8,0,0,0"
+                          Tag="repository" Click="OpenProductLink_OnClick" />
+                  <TextBox x:Name="RepositoryUrlText" Style="{StaticResource SelectableText}" />
+                </DockPanel>
+                <TextBlock Text="安卓手机 APP 下载" Foreground="#7D8494" Margin="0,14,0,0" />
+                <DockPanel Margin="0,5,0,0">
+                  <Image x:Name="AndroidDownloadQr" DockPanel.Dock="Right" Width="112" Height="112"
+                         Margin="16,0,0,0" Stretch="Uniform" />
+                  <StackPanel VerticalAlignment="Center">
+                    <TextBox x:Name="AndroidDownloadUrlText" Style="{StaticResource SelectableText}"
+                             TextWrapping="Wrap" />
+                    <Button Content="打开 APK 下载地址" HorizontalAlignment="Left" Padding="12,6" Margin="0,10,0,0"
+                            Tag="android" Click="OpenProductLink_OnClick" />
+                  </StackPanel>
+                </DockPanel>
+              </StackPanel>
+            </Border>
+            <TextBox Margin="0,14,0,8" TextWrapping="Wrap" Foreground="#7D8494"
+                     Style="{StaticResource SelectableText}"
+                     Text="独立实现，不包含海康威视源代码、商标或专有资源。" />
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
     </TabControl>
     <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
       <Button Content="取消" Background="#EEF0F8" Foreground="#4A5265" Click="Cancel_OnClick" />

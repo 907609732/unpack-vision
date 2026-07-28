@@ -11,6 +11,7 @@ public enum ScanAction
 }
 
 public sealed record ScanResult(ScanAction Action, string Message, ScanRecord? Record = null);
+public sealed record IssueTagUpdateResult(RecordTagAssignment Assignment, bool AlreadyActive);
 
 public sealed class RecordingCoordinator
 {
@@ -47,6 +48,113 @@ public sealed class RecordingCoordinator
     public event EventHandler<ScanResult>? StateChanged;
 
     public void UpdateScannerProfile(ScannerProfile scannerProfile) => ScannerProfile = scannerProfile;
+
+    public async Task<IssueTagUpdateResult?> AddIssueTagAsync(
+        IssueTagDefinition tag,
+        DateTimeOffset taggedAt,
+        string source,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(tag);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_currentRecord is not { State: RecordingState.Recording } record || _session is null)
+            {
+                return null;
+            }
+            var alreadyActive = record.Tags.Any(item => item.IsActive &&
+                string.Equals(item.TagId, tag.Id, StringComparison.OrdinalIgnoreCase));
+            var assignment = await _repository.AddTagAsync(record.Id, tag, taggedAt, source, cancellationToken);
+            record.Tags = await _repository.GetTagsAsync(record.Id, false, cancellationToken);
+            record.UpdatedAt = _clock.Now;
+            await _recordingBackend.UpdateIssueOverlayAsync(record.Id, record.Tags, cancellationToken);
+            if (!alreadyActive)
+            {
+                await _eventPublisher.PublishAsync("record.tagged", record, cancellationToken);
+            }
+            return new IssueTagUpdateResult(assignment, alreadyActive);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<RecordTagAssignment?> UndoLastIssueTagAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_currentRecord is not { State: RecordingState.Recording } record || _session is null)
+            {
+                return null;
+            }
+            var removed = await _repository.UndoLastTagAsync(record.Id, _clock.Now, cancellationToken);
+            if (removed is null)
+            {
+                return null;
+            }
+            record.Tags = await _repository.GetTagsAsync(record.Id, false, cancellationToken);
+            record.UpdatedAt = _clock.Now;
+            await _recordingBackend.UpdateIssueOverlayAsync(record.Id, record.Tags, cancellationToken);
+            await _eventPublisher.PublishAsync("record.tag_removed", record, cancellationToken);
+            return removed;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<bool> UpdateCurrentNoteAsync(string note, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_currentRecord is not { State: RecordingState.Recording } record || _session is null)
+            {
+                return false;
+            }
+            var normalized = (note ?? string.Empty).Trim();
+            if (string.Equals(record.Note, normalized, StringComparison.Ordinal))
+            {
+                return true;
+            }
+            var now = _clock.Now;
+            await _repository.UpdateNoteAsync(record.Id, normalized, now, cancellationToken);
+            record.Note = normalized;
+            record.NoteUpdatedAt = now;
+            record.UpdatedAt = now;
+            await _eventPublisher.PublishAsync("record.note_updated", record, cancellationToken);
+            return true;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<string?> TakeCurrentSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (_currentRecord is not { State: RecordingState.Recording } record || _session is null)
+            {
+                return null;
+            }
+            var path = await _recordingBackend.TakeSnapshotAsync(cancellationToken);
+            record.Snapshots = [.. record.Snapshots, path];
+            record.UpdatedAt = _clock.Now;
+            await _repository.UpdateAsync(record, cancellationToken);
+            return path;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     public async Task<ScanResult> ProcessScanAsync(
         string rawValue,

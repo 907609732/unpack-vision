@@ -13,6 +13,8 @@ public sealed class WorkbookLockedException(string message, Exception? innerExce
 public sealed class ExcelConnector : ISyncConnector
 {
     private const string SyncSheetName = "__UnpackVisionSync";
+    private const string AnnotationPrefix = "【电商拆包智能录像】";
+    private static readonly string[] OwnedAnnotationPrefixes = [AnnotationPrefix, "【拆包智录】"];
     private const string DefaultDateFormatCode = "m\"月\"d\"日\"";
     private static readonly double MinimumSupportedOaDate = new DateTime(2000, 1, 1).ToOADate();
     private static readonly double MaximumSupportedOaDate = new DateTime(2100, 12, 31, 23, 59, 59).ToOADate();
@@ -76,11 +78,14 @@ public sealed class ExcelConnector : ISyncConnector
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (record.State is not (RecordingState.Completed or RecordingState.Imported))
+        var isScanCollection = record.Workflow == WorkflowMode.ScanCollection &&
+                               record.State == RecordingState.Collected;
+        if (record.State is not (RecordingState.Completed or RecordingState.Imported) && !isScanCollection)
         {
-            throw new InvalidOperationException("只有已完成或已确认导入的录像才能同步到 Excel");
+            throw new InvalidOperationException("只有已完成录像、已确认导入录像或扫码收集记录才能同步到 Excel");
         }
-        if (string.IsNullOrWhiteSpace(record.VideoPath) || !File.Exists(record.VideoPath))
+        if (!isScanCollection &&
+            (string.IsNullOrWhiteSpace(record.VideoPath) || !File.Exists(record.VideoPath)))
         {
             throw new FileNotFoundException("录像文件不存在，已阻止写入 Excel", record.VideoPath);
         }
@@ -170,9 +175,12 @@ public sealed class ExcelConnector : ISyncConnector
 
         if (ContainsSyncMarker(syncPart, record.Id))
         {
+            var markedRow = FindMarkedRow(syncPart, record.Id);
+            UpdateAnnotation(workbookPart, sheetData, markedRow, record);
             targetWorksheet.Save();
+            syncWorksheet.Save();
             workbook.Save();
-            return FindMarkedRow(syncPart, record.Id);
+            return markedRow;
         }
 
         var rowIndex = Math.Max(1, lastDataRow?.RowIndex?.Value ?? 1) + 1;
@@ -188,7 +196,9 @@ public sealed class ExcelConnector : ISyncConnector
             CreateTextCell("B", rowIndex, record.TrackingNo, StyleOf(lastDataRow, "B")),
             CreateFormulaCell("C", rowIndex, AssociationFormula(rowIndex), StyleOf(lastDataRow, "C")),
             CreateBlankCell("D", rowIndex, StyleOf(lastDataRow, "D")),
-            CreateBlankCell("E", rowIndex, StyleOf(lastDataRow, "E")),
+            string.IsNullOrWhiteSpace(BuildAnnotation(record))
+                ? CreateBlankCell("E", rowIndex, StyleOf(lastDataRow, "E"))
+                : CreateTextCell("E", rowIndex, BuildAnnotation(record), StyleOf(lastDataRow, "E")),
             CreateBlankCell("F", rowIndex, StyleOf(lastDataRow, "F")));
         sheetData.Append(row);
 
@@ -431,6 +441,86 @@ public sealed class ExcelConnector : ISyncConnector
             CreateTextCell("B", index, targetRow.ToString(CultureInfo.InvariantCulture), null),
             CreateTextCell("C", index, DateTimeOffset.Now.ToString("O", CultureInfo.InvariantCulture), null))
         { RowIndex = index });
+    }
+
+    private static void UpdateAnnotation(WorkbookPart workbookPart, SheetData sheetData, uint rowIndex, ScanRecord record)
+    {
+        if (rowIndex == 0)
+        {
+            throw new InvalidDataException($"记录 {record.Id} 的 Excel 同步标记缺少目标行");
+        }
+        var row = sheetData.Elements<Row>().FirstOrDefault(item => item.RowIndex?.Value == rowIndex)
+            ?? throw new InvalidDataException($"Excel 第 {rowIndex} 行不存在，已停止更新备注");
+        var sharedStrings = workbookPart.SharedStringTablePart?.SharedStringTable;
+        var tracking = GetCellText(FindCell(row, "B"), sharedStrings);
+        if (!string.Equals(tracking, record.TrackingNo, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException($"Excel 第 {rowIndex} 行单号已变化，已停止覆盖备注");
+        }
+
+        var cell = FindCell(row, "E");
+        var style = cell?.StyleIndex;
+        var merged = MergeAnnotation(GetCellText(cell, sharedStrings), BuildAnnotation(record));
+        if (cell is not null)
+        {
+            cell.Remove();
+        }
+        var replacement = string.IsNullOrWhiteSpace(merged)
+            ? CreateBlankCell("E", rowIndex, style)
+            : CreateTextCell("E", rowIndex, merged, style);
+        var next = row.Elements<Cell>().FirstOrDefault(item =>
+            string.Compare(GetColumnName(item.CellReference?.Value), "E", StringComparison.OrdinalIgnoreCase) > 0);
+        if (next is null)
+        {
+            row.Append(replacement);
+        }
+        else
+        {
+            row.InsertBefore(replacement, next);
+        }
+    }
+
+    internal static string BuildAnnotation(ScanRecord record)
+    {
+        var tags = record.Tags.Where(item => item.IsActive).OrderBy(item => item.TaggedAt)
+            .Select(item => item.TagName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var parts = new List<string>();
+        if (tags.Length > 0)
+        {
+            parts.Add($"异常：{string.Join('、', tags)}");
+        }
+        if (!string.IsNullOrWhiteSpace(record.Note))
+        {
+            parts.Add($"备注：{record.Note.Trim().Replace("\r", " ").Replace("\n", " ")}");
+        }
+        return AnnotationPrefix + string.Join("；", parts);
+    }
+
+    internal static string MergeAnnotation(string? existing, string annotation)
+    {
+        var lines = (existing ?? string.Empty)
+            .Replace("\r\n", "\n")
+            .Split('\n')
+            .Select(line =>
+            {
+                var marker = OwnedAnnotationPrefixes
+                    .Select(prefix => line.IndexOf(prefix, StringComparison.Ordinal))
+                    .Where(index => index >= 0)
+                    .DefaultIfEmpty(-1)
+                    .Min();
+                return marker < 0 ? line : line[..marker].TrimEnd(' ', '；', ';');
+            })
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToList();
+        while (lines.Count > 0 && string.IsNullOrWhiteSpace(lines[^1]))
+        {
+            lines.RemoveAt(lines.Count - 1);
+        }
+        if (!string.IsNullOrWhiteSpace(annotation))
+        {
+            lines.Add(annotation);
+        }
+        return string.Join(Environment.NewLine, lines);
     }
 
     private static Cell CreateDateCell(string column, uint row, DateTimeOffset value, UInt32Value? style) => new()

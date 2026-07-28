@@ -129,6 +129,72 @@ public sealed class ExcelConnectorTests : IDisposable
         }));
     }
 
+    [Fact]
+    public async Task ScanCollectionRecordDoesNotRequireVideoFile()
+    {
+        Directory.CreateDirectory(_root);
+        var workbook = Path.Combine(_root, "collection.xlsx");
+        CreateWorkbook(workbook);
+        var connector = new ExcelConnector(new ExcelConnectorOptions
+        {
+            WorkbookPath = workbook,
+            BackupRoot = Path.Combine(_root, "backups")
+        });
+        var record = new ScanRecord
+        {
+            TrackingNo = "COLLECT00123",
+            Workflow = WorkflowMode.ScanCollection,
+            State = RecordingState.Collected,
+            ScannedAt = new DateTimeOffset(2026, 7, 21, 9, 30, 0, TimeSpan.FromHours(8)),
+            CreatedAt = DateTimeOffset.Now,
+            UpdatedAt = DateTimeOffset.Now
+        };
+
+        await connector.PushRecordAsync(record);
+
+        using var document = SpreadsheetDocument.Open(workbook, false);
+        var row = GetTargetRows(document.WorkbookPart!)[^1];
+        Assert.Equal("COLLECT00123", FindCell(row, "B")!.InlineString!.InnerText);
+        Assert.Equal("【电商拆包智能录像】", FindCell(row, "E")!.InlineString!.InnerText);
+    }
+
+    [Fact]
+    public async Task UpdatesOwnedAnnotationAndPreservesManualNotes()
+    {
+        Directory.CreateDirectory(_root);
+        var workbook = Path.Combine(_root, "annotations.xlsx");
+        CreateWorkbook(workbook);
+        var (connector, videoPath) = await CreateConnectorWithVideoAsync(workbook, "annotation.mp4");
+        var record = CreateRecord("SF-ANNOTATION", videoPath);
+        record.Note = "外箱破裂";
+        record.Tags = [new RecordTagAssignment { TagId = "DAMAGE", TagName = "破损", TaggedAt = record.ScannedAt }];
+        await connector.PushRecordAsync(record);
+
+        using (var document = SpreadsheetDocument.Open(workbook, true))
+        {
+            var row = GetTargetRows(document.WorkbookPart!)[^1];
+            var cell = FindCell(row, "E")!;
+            cell.InlineString = new InlineString(new Text("人工复核：待赔付\n【拆包智录】异常：破损；备注：外箱破裂"));
+            cell.DataType = CellValues.InlineString;
+            document.WorkbookPart!.Workbook!.Save();
+        }
+
+        record.Note = "已拍照留证";
+        record.Tags =
+        [
+            record.Tags[0],
+            new RecordTagAssignment { TagId = "SWAP", TagName = "调包", TaggedAt = record.ScannedAt.AddSeconds(5) }
+        ];
+        await connector.PushRecordAsync(record);
+
+        using var verify = SpreadsheetDocument.Open(workbook, false);
+        var text = FindCell(GetTargetRows(verify.WorkbookPart!)[^1], "E")!.InlineString!.InnerText;
+        Assert.Contains("人工复核：待赔付", text);
+        Assert.Contains("【电商拆包智能录像】异常：破损、调包；备注：已拍照留证", text);
+        Assert.DoesNotContain("【拆包智录】", text);
+        Assert.DoesNotContain("外箱破裂", text);
+    }
+
     private async Task<(ExcelConnector Connector, string VideoPath)> CreateConnectorWithVideoAsync(
         string workbook,
         string videoName)
