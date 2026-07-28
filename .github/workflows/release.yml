@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        shell: pwsh
+        run: |
+          sdkmanager "platforms;android-37" "build-tools;37.0.0" "platform-tools"
+
+      - name: Restore and test .NET
+        shell: pwsh
+        run: |
+          dotnet restore .\UnpackVision.slnx
+          dotnet test .\UnpackVision.slnx -c Release --no-restore
+
+      - name: Prepare Android release signing
+        shell: pwsh
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:KEYSTORE_BASE64)) {
+            throw "ANDROID_KEYSTORE_BASE64 is not configured."
+          }
+          $keystore = Join-Path $env:RUNNER_TEMP "ecommerce-unpack-recorder.jks"
+          [IO.File]::WriteAllBytes($keystore, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+          "ANDROID_KEYSTORE_PATH=$keystore" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ANDROID_KEYSTORE_PASSWORD=$env:KEYSTORE_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ANDROID_KEY_ALIAS=$env:KEY_ALIAS" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ANDROID_KEY_PASSWORD=$env:KEY_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Test and build signed Android APK
+        shell: pwsh
+        run: |
+          .\mobile\UnpackVision.Android\gradlew.bat `
+            -p .\mobile\UnpackVision.Android `
+            app:testDebugUnitTest app:assembleRelease `
+            --no-daemon --console=plain
+
+      - name: Download previous Velopack packages for delta updates
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force -Path .\artifacts\velopack-release | Out-Null
+          gh release download `
+            --repo ${{ github.repository }} `
+            --pattern "releases.win.json" `
+            --pattern "*.nupkg" `
+            --dir .\artifacts\velopack-release `
+            --clobber 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "No previous Velopack release is available; building the initial full package."
+          }
+
+      - name: Build Windows installer and release files
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          .\scripts\package-release.ps1 `
+            -Version $version `
+            -AndroidApk .\mobile\UnpackVision.Android\app\build\outputs\apk\release\app-release.apk
+
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: artifacts/release-output/*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: docs/releases/2.1.0.md
+          files: artifacts/release-output/*
+          fail_on_unmatched_files: true
