@@ -84,6 +84,7 @@ jobs:
             --clobber 2>$null
           if ($LASTEXITCODE -ne 0) {
             Write-Host "No previous Velopack release is available; building the initial full package."
+            $global:LASTEXITCODE = 0
           }
 
       - name: Build Windows installer and release files
