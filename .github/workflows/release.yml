@@ -36,7 +36,7 @@ jobs:
       - name: Install Android platform
         shell: pwsh
         run: |
-          sdkmanager "platforms;android-37" "build-tools;37.0.0" "platform-tools"
+          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
 
       - name: Restore and test .NET
         shell: pwsh
