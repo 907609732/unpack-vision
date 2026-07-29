@@ -63,7 +63,7 @@ class UpdateCheckWorker(
             applicationContext,
             UPDATE_NOTIFICATION_ID,
             updateIntent,
-            PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            PendingIntent.FLAG_IMMUTABLE
         )
         val title = if (manifest.critical) "发现安全更新" else "发现新版本"
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
