@@ -31,7 +31,7 @@ internal static class StationHostConnection
         Process.Start(new ProcessStartInfo
         {
             FileName = executable,
-            Arguments = "--StationHost:LanHttpPrototypeEnabled=true",
+            Arguments = "--StationHost:LanHttpPrototypeEnabled=false --StationHost:LanHttpsEnabled=true",
             WorkingDirectory = Path.GetDirectoryName(executable)!,
             UseShellExecute = false,
             CreateNoWindow = true,

@@ -1,9 +1,12 @@
 using System.Globalization;
+using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Net.Http.Headers;
 using UnpackVision.Core;
 using UnpackVision.Infrastructure;
@@ -29,15 +32,39 @@ if (string.IsNullOrWhiteSpace(stationOptions.StationId))
 {
     stationOptions.StationId = Environment.MachineName;
 }
-if (stationOptions.LanHttpPrototypeEnabled)
+var lanAddresses = GetPrivateIpv4Addresses();
+stationOptions.LanHttpsEnabled =
+    stationOptions.LanHttpsEnabled && lanAddresses.Length > 0;
+var certificateMaterial = StationCertificateStore.LoadOrCreate(
+    stationOptions.StationId,
+    lanAddresses,
+    stationOptions.SecurityDirectory);
+stationOptions.CertificateFingerprint = certificateMaterial.Fingerprint;
+stationOptions.LanHttpPrototypeEnabled = false;
+if (string.IsNullOrWhiteSpace(stationOptions.AdvertisedAddress) && lanAddresses.FirstOrDefault() is { } preferredAddress)
 {
-    // Development-only bridge for the first physical-phone prototype. The
-    // default remains loopback-only; production pairing will use pinned TLS.
-    // Bind only the addresses the station actually uses. Binding 0.0.0.0 can
-    // fail when another desktop app already owns the same source port on an
-    // unrelated virtual adapter (for example iCloud or a proxy adapter).
-    builder.WebHost.UseUrls(GetLanPrototypeUrls());
+    stationOptions.AdvertisedAddress =
+        $"https://{preferredAddress}:{stationOptions.LanHttpsPort}";
 }
+mediaRelayOptions.CertificatePath = certificateMaterial.CertificatePemPath;
+mediaRelayOptions.PrivateKeyPath = certificateMaterial.PrivateKeyPemPath;
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = 4 * 1024 * 1024;
+    options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(10);
+    options.Limits.KeepAliveTimeout = TimeSpan.FromSeconds(30);
+    options.ListenLocalhost(5271);
+    if (stationOptions.LanHttpsEnabled)
+    {
+        foreach (var address in lanAddresses)
+        {
+            options.Listen(
+                address,
+                stationOptions.LanHttpsPort,
+                listen => listen.UseHttps(certificateMaterial.Certificate));
+        }
+    }
+});
 
 builder.Services.AddSingleton(storageOptions);
 builder.Services.AddSingleton(excelOptions);
@@ -73,6 +100,29 @@ builder.Services.AddSingleton<DesktopCommandBridge>();
 builder.Services.AddHostedService<StationDiscoveryPublisher>();
 builder.Services.AddSignalR();
 builder.Services.AddOpenApi();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("pairing", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        }));
+    options.AddPolicy("device", context => RateLimitPartition.GetTokenBucketLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = 120,
+            TokensPerPeriod = 60,
+            ReplenishmentPeriod = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true
+        }));
+});
 builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
@@ -84,13 +134,52 @@ await deviceRegistry.InitializeAsync();
 var commandLedger = app.Services.GetRequiredService<IScanCommandLedger>();
 await commandLedger.InitializeAsync();
 
+const string securityGenerationKey = "station-security-generation";
+if (!string.Equals(
+        await repository.GetMetadataAsync(securityGenerationKey),
+        "2.2.0",
+        StringComparison.Ordinal))
+{
+    foreach (var device in await deviceRegistry.GetAllAsync())
+    {
+        await deviceRegistry.DeleteAsync(device.Id);
+    }
+    await repository.SetMetadataAsync(securityGenerationKey, "2.2.0");
+}
+
+app.UseRateLimiter();
+app.Use(async (context, next) =>
+{
+    var requestHost = context.Request.Host.Host;
+    if (!IsLoopback(context) &&
+        !lanAddresses.Any(address => string.Equals(address.ToString(), requestHost, StringComparison.OrdinalIgnoreCase)))
+    {
+        context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        await context.Response.WriteAsJsonAsync(new { error = "Host 不属于当前工位安全地址" });
+        return;
+    }
+    if (context.Request.Path.StartsWithSegments("/openapi") && !IsLoopback(context))
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+    var maximumBody = context.Request.Path.StartsWithSegments("/device/v1/pair") ||
+                      context.Request.Path.Value?.EndsWith("/scans", StringComparison.OrdinalIgnoreCase) == true
+        ? 64 * 1024
+        : 4 * 1024 * 1024;
+    if (context.Request.ContentLength > maximumBody)
+    {
+        context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+        return;
+    }
+    await next();
+});
 app.MapOpenApi();
-app.MapGet("/api/v1/health", (IScanCommandRouter router, IMediaRelayManager mediaRelay) => Results.Ok(new
+app.MapGet("/api/v1/health", () => Results.Ok(new
 {
     status = "healthy",
-    station = router.GetState(),
-    mediaRelayRunning = mediaRelay.IsRunning,
-    pairingTlsReady = !string.IsNullOrWhiteSpace(stationOptions.CertificateFingerprint),
+    version = "2.2.0",
+    tls = stationOptions.LanHttpsEnabled,
     time = DateTimeOffset.Now
 }));
 app.MapPost("/internal/shutdown", (
@@ -140,6 +229,7 @@ app.MapPost("/api/v1/records", async Task<IResult> (
         return Results.Unauthorized();
     }
     if (string.IsNullOrWhiteSpace(request.TrackingNo) ||
+        request.TrackingNo.Length > 128 ||
         string.IsNullOrWhiteSpace(request.VideoPath) ||
         !File.Exists(request.VideoPath))
     {
@@ -190,7 +280,9 @@ app.MapGet("/api/v1/records/{id:guid}/video", async Task<IResult> (
         return Results.Unauthorized();
     }
     var record = await records.GetAsync(id, cancellationToken);
-    if (record?.VideoPath is not { Length: > 0 } videoPath || !File.Exists(videoPath))
+    if (record?.VideoPath is not { Length: > 0 } videoPath ||
+        !IsPathUnderRoot(videoPath, storageOptions.RecordingRoot) ||
+        !File.Exists(videoPath))
     {
         return Results.NotFound(new { error = "录像文件不存在" });
     }
@@ -216,7 +308,8 @@ app.MapGet("/api/v1/records/{id:guid}/thumbnail", async Task<IResult> (
         return Results.Unauthorized();
     }
     var record = await records.GetAsync(id, cancellationToken);
-    var snapshot = record?.Snapshots.FirstOrDefault(File.Exists);
+    var snapshot = record?.Snapshots.FirstOrDefault(path =>
+        IsPathUnderRoot(path, storageOptions.RecordingRoot) && File.Exists(path));
     return snapshot is null
         ? Results.NotFound(new { error = "缩略图不存在" })
         : Results.File(snapshot, GetImageContentType(Path.GetExtension(snapshot)), enableRangeProcessing: true);
@@ -271,7 +364,7 @@ app.MapGet("/api/v1/stations/{id}/state", async Task<IResult> (
         state.MediaRelayRunning,
         desktopReady = desktopState is not null
     });
-});
+}).RequireRateLimiting("device");
 
 app.MapPost("/api/v1/stations/{id}/scans", async Task<IResult> (
     string id,
@@ -289,6 +382,16 @@ app.MapPost("/api/v1/stations/{id}/scans", async Task<IResult> (
     if (!string.Equals(command.StationId, id, StringComparison.OrdinalIgnoreCase))
     {
         return Results.BadRequest(new { error = "命令中的 stationId 与请求地址不一致" });
+    }
+    if (command.EventId == Guid.Empty ||
+        string.IsNullOrWhiteSpace(command.DeviceId) ||
+        command.DeviceId.Length > 128 ||
+        string.IsNullOrWhiteSpace(command.Value) ||
+        command.Value.Length > 512 ||
+        string.IsNullOrWhiteSpace(command.IdempotencyKey) ||
+        command.IdempotencyKey.Length > 128)
+    {
+        return Results.BadRequest(new { error = "扫码命令字段为空或超过安全长度" });
     }
     var isLoopback = IsLoopback(request.HttpContext);
     if (!isLoopback)
@@ -317,16 +420,31 @@ app.MapPost("/api/v1/stations/{id}/scans", async Task<IResult> (
     }
 
     return Results.Ok(await router.RouteAsync(command, cancellationToken));
-});
+}).RequireRateLimiting("device");
 
-app.MapPost("/api/v1/pairing/sessions", (HttpRequest request, PairingSessionStore sessions) =>
+app.MapPost("/api/v1/pairing/sessions", (
+    string? address,
+    HttpRequest request,
+    PairingSessionStore sessions) =>
 {
     if (!IsLoopback(request.HttpContext))
     {
         return Results.Unauthorized();
     }
-    var requestAddress = new Uri($"{request.Scheme}://{request.Host}");
-    return Results.Ok(sessions.Create(requestAddress));
+    var requestAddress = Uri.TryCreate(stationOptions.AdvertisedAddress, UriKind.Absolute, out var advertised)
+        ? advertised
+        : new Uri("https://127.0.0.1:5273");
+    Uri? selectedAddress = null;
+    if (!string.IsNullOrWhiteSpace(address))
+    {
+        if (!IPAddress.TryParse(address, out var parsed) ||
+            !lanAddresses.Contains(parsed))
+        {
+            return Results.BadRequest(new { error = "所选地址不是当前 Windows 专用网络地址" });
+        }
+        selectedAddress = new Uri($"https://{parsed}:{stationOptions.LanHttpsPort}");
+    }
+    return Results.Ok(sessions.Create(requestAddress, selectedAddress));
 });
 
 app.MapPost("/device/v1/pair", async Task<IResult> (
@@ -335,9 +453,15 @@ app.MapPost("/device/v1/pair", async Task<IResult> (
     IPairedDeviceRegistry devices,
     CancellationToken cancellationToken) =>
 {
-    if (string.IsNullOrWhiteSpace(request.PublicKey))
+    if (string.IsNullOrWhiteSpace(request.PublicKey) ||
+        request.PublicKey.Length > 4096 ||
+        string.IsNullOrWhiteSpace(request.Name) ||
+        request.Name.Length > 100 ||
+        request.Token.Length > 256 ||
+        request.Roles.Count > 10 ||
+        request.Scopes.Count > 10)
     {
-        return Results.BadRequest(new { error = "手机设备密钥为空，请重新打开手机端后再试" });
+        return Results.BadRequest(new { error = "配对资料为空或超过安全长度，请重新打开手机端后再试" });
     }
     if (!sessions.TryConsume(request.SessionId, request.Token, out _))
     {
@@ -352,13 +476,19 @@ app.MapPost("/device/v1/pair", async Task<IResult> (
         "records:read",
         "video:read"
     };
+    var allowedRoles = new HashSet<string>(StringComparer.Ordinal)
+    {
+        "scanner",
+        "camera",
+        "remote"
+    };
     var registration = new DeviceRegistration(
         request.Name,
         request.PublicKey,
-        request.Roles.Distinct(StringComparer.Ordinal).ToArray(),
+        request.Roles.Where(allowedRoles.Contains).Distinct(StringComparer.Ordinal).ToArray(),
         request.Scopes.Where(allowedScopes.Contains).Distinct(StringComparer.Ordinal).ToArray());
     return Results.Ok(await devices.PairAsync(registration, cancellationToken));
-});
+}).RequireRateLimiting("pairing");
 
 app.MapGet("/api/v1/devices", async Task<IResult> (
     HttpRequest request,
@@ -422,7 +552,7 @@ app.MapPost("/api/v1/media/publish-session", async Task<IResult> (
         return Results.Unauthorized();
     }
     await mediaRelay.StartAsync(cancellationToken);
-    var endpoint = mediaRelay.CreatePublishEndpoint(request.Host.Host, device.Id);
+    var endpoint = mediaRelay.CreatePublishEndpoint(GetAdvertisedHost(stationOptions), device.Id);
     if (recordingBackend is OpenCvRecordingBackend openCvBackend)
     {
         var phoneCamera = new CameraOptions
@@ -444,7 +574,7 @@ app.MapPost("/api/v1/media/publish-session", async Task<IResult> (
         await openCvBackend.ConfigureCameraAsync(phoneCamera, restartPreview: false, cancellationToken);
     }
     return Results.Ok(endpoint);
-});
+}).RequireRateLimiting("device");
 
 app.MapGet("/api/v1/stations/{id}/live", async Task<IResult> (
     string id,
@@ -483,8 +613,11 @@ app.MapGet("/api/v1/stations/{id}/live", async Task<IResult> (
         return Results.NotFound(new { error = "没有可用的手机摄像头" });
     }
     await mediaRelay.StartAsync(cancellationToken);
-    return Results.Ok(mediaRelay.CreateLiveEndpoint(request.Host.Host, camera.Id, reader.Id));
-});
+    return Results.Ok(mediaRelay.CreateLiveEndpoint(
+        GetAdvertisedHost(stationOptions),
+        camera.Id,
+        reader.Id));
+}).RequireRateLimiting("device");
 
 app.MapPost("/internal/media/auth", async Task<IResult> (
     MediaMtxAuthRequest request,
@@ -530,19 +663,75 @@ static T BindOptions<T>(IConfiguration configuration, string sectionName) where 
     return value;
 }
 
-static string[] GetLanPrototypeUrls()
+static IPAddress[] GetPrivateIpv4Addresses()
 {
-    var urls = NetworkInterface.GetAllNetworkInterfaces()
+    var privateInterfaceIndexes = GetPrivateNetworkInterfaceIndexes();
+    if (privateInterfaceIndexes.Count == 0)
+    {
+        return [];
+    }
+    return [.. NetworkInterface.GetAllNetworkInterfaces()
         .Where(item => item.OperationalStatus == OperationalStatus.Up)
         .Where(item => item.NetworkInterfaceType is not NetworkInterfaceType.Loopback and not NetworkInterfaceType.Tunnel)
+        .Where(item =>
+        {
+            try
+            {
+                return privateInterfaceIndexes.Contains(
+                    item.GetIPProperties().GetIPv4Properties()?.Index ?? -1);
+            }
+            catch (NetworkInformationException)
+            {
+                return false;
+            }
+        })
         .SelectMany(item => item.GetIPProperties().UnicastAddresses)
         .Select(item => item.Address)
         .Where(address => address.AddressFamily == AddressFamily.InterNetwork && IsPrivateIpv4(address))
-        .Select(address => $"http://{address}:5271")
-        .Distinct(StringComparer.Ordinal)
-        .ToList();
-    urls.Insert(0, "http://127.0.0.1:5271");
-    return [.. urls];
+        .Distinct()
+        .OrderBy(address => address.ToString())];
+}
+
+static HashSet<int> GetPrivateNetworkInterfaceIndexes()
+{
+    try
+    {
+        var powershell = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.System),
+            @"WindowsPowerShell\v1.0\powershell.exe");
+        if (!File.Exists(powershell))
+        {
+            return [];
+        }
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = powershell,
+            Arguments =
+                "-NoProfile -NonInteractive -Command " +
+                "\"Get-NetConnectionProfile | Where-Object NetworkCategory -eq 'Private' | " +
+                "Select-Object -ExpandProperty InterfaceIndex\"",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        });
+        if (process is null || !process.WaitForExit(3000))
+        {
+            try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+            return [];
+        }
+        return process.StandardOutput.ReadToEnd()
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(value => int.TryParse(value, out var index) ? index : -1)
+            .Where(index => index >= 0)
+            .ToHashSet();
+    }
+    catch (Exception exception) when (
+        exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+    {
+        return [];
+    }
 }
 
 static bool IsPrivateIpv4(IPAddress address)
@@ -551,6 +740,33 @@ static bool IsPrivateIpv4(IPAddress address)
     return bytes[0] == 10 ||
            bytes[0] == 192 && bytes[1] == 168 ||
            bytes[0] == 172 && bytes[1] is >= 16 and <= 31;
+}
+
+static string GetAdvertisedHost(StationHostOptions options)
+{
+    if (!Uri.TryCreate(options.AdvertisedAddress, UriKind.Absolute, out var address) ||
+        string.IsNullOrWhiteSpace(address.Host))
+    {
+        throw new InvalidOperationException("工位没有可用的局域网安全地址");
+    }
+    return address.Host;
+}
+
+static bool IsPathUnderRoot(string path, string root)
+{
+    try
+    {
+        var fullRoot = Path.GetFullPath(root)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+            Path.DirectorySeparatorChar;
+        var fullPath = Path.GetFullPath(path);
+        return fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase);
+    }
+    catch (Exception exception) when (
+        exception is ArgumentException or NotSupportedException or PathTooLongException)
+    {
+        return false;
+    }
 }
 
 static bool IsLoopback(HttpContext context) =>

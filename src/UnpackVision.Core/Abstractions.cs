@@ -125,6 +125,18 @@ public interface IEventPublisher
     Task PublishAsync(string eventType, ScanRecord record, CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Optional, consent-gated product telemetry. The 2.2.0 release registers the
+/// no-op implementation so no usage data leaves the device.
+/// </summary>
+public interface IUsageTelemetry
+{
+    Task TrackAsync(
+        string eventName,
+        IReadOnlyDictionary<string, string>? properties = null,
+        CancellationToken cancellationToken = default);
+}
+
 public interface IScanCommandRouter
 {
     Task<ScanAcknowledgement> RouteAsync(
@@ -180,5 +192,14 @@ public interface IMediaRelayManager : IAsyncDisposable
 public sealed class NullEventPublisher : IEventPublisher
 {
     public Task PublishAsync(string eventType, ScanRecord record, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+}
+
+public sealed class NoOpUsageTelemetry : IUsageTelemetry
+{
+    public Task TrackAsync(
+        string eventName,
+        IReadOnlyDictionary<string, string>? properties = null,
+        CancellationToken cancellationToken = default) =>
         Task.CompletedTask;
 }

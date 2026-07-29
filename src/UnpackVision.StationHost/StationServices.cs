@@ -51,20 +51,26 @@ public sealed class StationHostOptions
     public string StationId { get; set; } = Environment.MachineName;
     public string AdvertisedAddress { get; set; } = string.Empty;
     public string CertificateFingerprint { get; set; } = string.Empty;
+    public string SecurityDirectory { get; set; } =
+        "%LOCALAPPDATA%\\UnpackVision\\Security";
     public int PairingLifetimeMinutes { get; set; } = 5;
     public bool LanHttpPrototypeEnabled { get; set; }
+    public bool LanHttpsEnabled { get; set; } = true;
+    public int LanHttpsPort { get; set; } = 5273;
 }
 
 public sealed class PairingSessionStore(IClock clock, StationHostOptions options)
 {
     private readonly ConcurrentDictionary<Guid, PairingSessionDescriptor> _sessions = new();
+    private readonly ConcurrentDictionary<Guid, int> _failedAttempts = new();
 
-    public PairingSessionDescriptor Create(Uri requestAddress)
+    public PairingSessionDescriptor Create(Uri requestAddress, Uri? advertisedOverride = null)
     {
         CleanupExpired();
-        var advertised = Uri.TryCreate(options.AdvertisedAddress, UriKind.Absolute, out var configured)
+        var advertised = advertisedOverride ??
+            (Uri.TryCreate(options.AdvertisedAddress, UriKind.Absolute, out var configured)
             ? configured
-            : requestAddress;
+            : requestAddress);
         var token = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
             .TrimEnd('=')
             .Replace('+', '-')
@@ -90,12 +96,18 @@ public sealed class PairingSessionStore(IClock clock, StationHostOptions options
         if (candidate.ExpiresAt <= clock.Now)
         {
             _sessions.TryRemove(id, out _);
+            _failedAttempts.TryRemove(id, out _);
             return false;
         }
         var supplied = System.Text.Encoding.UTF8.GetBytes(token ?? string.Empty);
         var expected = System.Text.Encoding.UTF8.GetBytes(candidate.Token);
         if (supplied.Length != expected.Length || !CryptographicOperations.FixedTimeEquals(supplied, expected))
         {
+            if (_failedAttempts.AddOrUpdate(id, 1, (_, count) => count + 1) >= 5)
+            {
+                _sessions.TryRemove(id, out _);
+                _failedAttempts.TryRemove(id, out _);
+            }
             return false;
         }
         // Only a successfully authenticated request may consume the one-time
@@ -105,6 +117,7 @@ public sealed class PairingSessionStore(IClock clock, StationHostOptions options
             return false;
         }
         session = consumed;
+        _failedAttempts.TryRemove(id, out _);
         return true;
     }
 
@@ -113,6 +126,7 @@ public sealed class PairingSessionStore(IClock clock, StationHostOptions options
         foreach (var item in _sessions.Where(item => item.Value.ExpiresAt <= clock.Now))
         {
             _sessions.TryRemove(item.Key, out _);
+            _failedAttempts.TryRemove(item.Key, out _);
         }
     }
 }

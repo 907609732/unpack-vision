@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
@@ -22,18 +23,38 @@ data class MobileUpdateManifest(
     val versionCode: Int,
     val apkUrl: String,
     val sha256: String,
-    val notesUrl: String?
+    val notesUrl: String?,
+    val releaseNotesUrl: String?,
+    val minimumSupportedVersion: String?,
+    val critical: Boolean,
+    val publishedAt: String?
 )
 
 internal object MobileUpdateManifestParser {
     fun parse(body: String): MobileUpdateManifest {
         val json = JSONObject(body)
+        val versionName = json.getString("versionName").trim()
+        val versionCode = json.getInt("versionCode")
+        val apkUrl = json.optString("apkUrl", AppUpdateManager.APK_URL).trim()
+        val sha256 = json.getString("sha256").trim().lowercase()
+        require(versionName.length in 1..40 && versionCode > 0) { "更新版本信息无效" }
+        require(sha256.matches(Regex("^[0-9a-f]{64}$"))) { "更新 SHA256 无效" }
+        val apkUri = URI(apkUrl)
+        require(
+            apkUri.scheme.equals("https", ignoreCase = true) &&
+                apkUri.host.equals("github.com", ignoreCase = true)
+        ) { "更新地址不是受信任的 GitHub HTTPS 地址" }
         return MobileUpdateManifest(
-            versionName = json.getString("versionName"),
-            versionCode = json.getInt("versionCode"),
-            apkUrl = json.optString("apkUrl", AppUpdateManager.APK_URL),
-            sha256 = json.getString("sha256").lowercase(),
-            notesUrl = json.optString("notesUrl").takeIf { it.isNotBlank() }
+            versionName = versionName,
+            versionCode = versionCode,
+            apkUrl = apkUrl,
+            sha256 = sha256,
+            notesUrl = json.optString("notesUrl").takeIf { it.isNotBlank() },
+            releaseNotesUrl = json.optString("releaseNotesUrl").takeIf { it.isNotBlank() },
+            minimumSupportedVersion =
+                json.optString("minimumSupportedVersion").takeIf { it.isNotBlank() },
+            critical = json.optBoolean("critical", false),
+            publishedAt = json.optString("publishedAt").takeIf { it.isNotBlank() }
         )
     }
 }
@@ -54,6 +75,7 @@ class AppUpdateManager(private val context: Context) {
         private const val PREFS = "app_updates"
         private const val LAST_CHECK = "last_check"
         private val CHECK_INTERVAL = TimeUnit.DAYS.toMillis(1)
+        private const val MAX_APK_BYTES = 150L * 1024L * 1024L
     }
 
     suspend fun check(force: Boolean = false): MobileUpdateResult = withContext(Dispatchers.IO) {
@@ -100,6 +122,10 @@ class AppUpdateManager(private val context: Context) {
                 val status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
                 val total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES))
                 val downloaded = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
+                if (total > MAX_APK_BYTES || downloaded > MAX_APK_BYTES) {
+                    manager.remove(id)
+                    error("更新文件超过 150MB 安全上限")
+                }
                 if (total > 0) onProgress(((downloaded * 100L) / total).toInt().coerceIn(0, 100))
                 when (status) {
                     DownloadManager.STATUS_SUCCESSFUL -> downloadUri = manager.getUriForDownloadedFile(id)

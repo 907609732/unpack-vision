@@ -1,0 +1,78 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "25 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  codeql-csharp:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: github/codeql-action/init@3b0bd1d116c0bde30213346b22d4f634d96a2fb0 # v3
+        with:
+          languages: csharp
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet test .\UnpackVision.slnx -c Release
+      - uses: github/codeql-action/analyze@3b0bd1d116c0bde30213346b22d4f634d96a2fb0 # v3
+
+  codeql-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: github/codeql-action/init@3b0bd1d116c0bde30213346b22d4f634d96a2fb0 # v3
+        with:
+          languages: java-kotlin
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+      - run: ./gradlew testDebugUnitTest assembleDebug --no-daemon
+        working-directory: mobile/UnpackVision.Android
+      - uses: github/codeql-action/analyze@3b0bd1d116c0bde30213346b22d4f634d96a2fb0 # v3
+
+  repository-scans:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Check workflow syntax
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
+      - name: Scan committed secrets
+        uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Scan known vulnerable dependencies with OSV
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        with:
+          scan-args: |-
+            scan
+            source
+            --recursive
+            ./
+      - name: Scan filesystem, secrets, configuration and licenses with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,secret,misconfig,license
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"

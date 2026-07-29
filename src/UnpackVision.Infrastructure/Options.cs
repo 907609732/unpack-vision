@@ -92,6 +92,9 @@ public sealed class MediaRelayOptions
         "MediaMTX");
     public string AuthHttpAddress { get; set; } = "http://127.0.0.1:5271/internal/media/auth";
     public string ControlApiAddress { get; set; } = "http://127.0.0.1:9997";
+    public string CertificatePath { get; set; } = string.Empty;
+    public string PrivateKeyPath { get; set; } = string.Empty;
     public int RtspPort { get; set; } = 8554;
+    public int RtspsPort { get; set; } = 8555;
     public int WebRtcPort { get; set; } = 8889;
 }

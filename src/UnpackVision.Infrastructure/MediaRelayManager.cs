@@ -145,13 +145,13 @@ public sealed class MediaRelayManager : IMediaRelayManager
     public MediaPublishEndpoint CreatePublishEndpoint(string host, string deviceId)
     {
         var path = CreateDevicePath(deviceId);
-        return new MediaPublishEndpoint(path, new Uri($"rtsp://{FormatHost(host)}:{_options.RtspPort}/{path}"), deviceId);
+        return new MediaPublishEndpoint(path, new Uri($"rtsps://{FormatHost(host)}:{_options.RtspsPort}/{path}"), deviceId);
     }
 
     public MediaLiveEndpoint CreateLiveEndpoint(string host, string deviceId, string authUser)
     {
         var path = CreateDevicePath(deviceId);
-        return new MediaLiveEndpoint(path, new Uri($"http://{FormatHost(host)}:{_options.WebRtcPort}/{path}/whep"), authUser);
+        return new MediaLiveEndpoint(path, new Uri($"https://{FormatHost(host)}:{_options.WebRtcPort}/{path}/whep"), authUser);
     }
 
     public async ValueTask DisposeAsync()
@@ -296,7 +296,16 @@ public sealed class MediaRelayManager : IMediaRelayManager
 
 public static class MediaRelayConfiguration
 {
-    public static string Build(MediaRelayOptions options) => $$"""
+    public static string Build(MediaRelayOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.CertificatePath) ||
+            string.IsNullOrWhiteSpace(options.PrivateKeyPath))
+        {
+            throw new InvalidOperationException("媒体中继缺少 TLS 证书配置");
+        }
+        var certificate = options.CertificatePath.Replace('\\', '/');
+        var privateKey = options.PrivateKeyPath.Replace('\\', '/');
+        return $$"""
         logLevel: info
         logDestinations: [stdout]
         authMethod: http
@@ -312,13 +321,17 @@ public static class MediaRelayConfiguration
         playback: false
         rtsp: true
         rtspTransports: [tcp]
-        rtspEncryption: "no"
-        rtspAddress: :{{options.RtspPort}}
+        rtspEncryption: "strict"
+        rtspsAddress: :{{options.RtspsPort}}
+        rtspServerKey: '{{privateKey}}'
+        rtspServerCert: '{{certificate}}'
         rtmp: false
         hls: false
         webrtc: true
         webrtcAddress: :{{options.WebRtcPort}}
-        webrtcEncryption: false
+        webrtcEncryption: true
+        webrtcServerKey: '{{privateKey}}'
+        webrtcServerCert: '{{certificate}}'
         webrtcAllowOrigins: []
         webrtcLocalUDPAddress: :8189
         webrtcLocalTCPAddress: ""
@@ -329,4 +342,5 @@ public static class MediaRelayConfiguration
             source: publisher
             overridePublisher: false
         """;
+    }
 }

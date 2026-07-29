@@ -16,8 +16,8 @@ android {
         applicationId = "com.unpackvision.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20100
-        versionName = "2.1.0"
+        versionCode = 20200
+        versionName = "2.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -77,6 +77,7 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.core:core-ktx:1.18.0")
+    implementation("androidx.work:work-runtime-ktx:2.11.0")
 
     implementation("androidx.camera:camera-core:1.5.3")
     implementation("androidx.camera:camera-camera2:1.5.3")

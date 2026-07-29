@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -50,11 +51,20 @@ public partial class DevicePairingWindow : Window
         try
         {
             await StationHostConnection.EnsureRunningAsync();
-            using var response = await StationHostConnection.Http.PostAsync("/api/v1/pairing/sessions", null);
+            var selectedAddress = GetSelectedLanIpv4();
+            using var response = await StationHostConnection.Http.PostAsync(
+                $"/api/v1/pairing/sessions?address={Uri.EscapeDataString(selectedAddress.ToString())}",
+                null);
             response.EnsureSuccessStatusCode();
             using var descriptor = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
             var root = descriptor.RootElement;
-            var lanAddress = $"http://{GetSelectedLanIpv4()}:5271";
+            var lanAddress = root.GetProperty("stationAddress").GetString()
+                ?? throw new InvalidOperationException("工位主机没有返回安全配对地址");
+            if (!Uri.TryCreate(lanAddress, UriKind.Absolute, out var safeAddress) ||
+                !string.Equals(safeAddress.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("工位主机返回了不安全的配对地址");
+            }
             var payload = JsonSerializer.Serialize(new
             {
                 id = root.GetProperty("id").GetGuid(),
@@ -74,7 +84,7 @@ public partial class DevicePairingWindow : Window
         catch (Exception exception)
         {
             StatusText.Text = $"无法生成配对二维码：{exception.Message}";
-            ExpiryText.Text = "请确认当前网络为专用网络，并检查 5271 端口是否被占用。";
+            ExpiryText.Text = "请确认当前网络为专用网络，并检查 5273 端口是否被占用。";
         }
         finally
         {
@@ -120,9 +130,22 @@ public partial class DevicePairingWindow : Window
 
     private static string[] GetLanIpv4Candidates()
     {
+        var privateIndexes = GetPrivateNetworkInterfaceIndexes();
         return NetworkInterface.GetAllNetworkInterfaces()
             .Where(item => item.OperationalStatus == OperationalStatus.Up)
             .Where(item => item.NetworkInterfaceType is not NetworkInterfaceType.Loopback and not NetworkInterfaceType.Tunnel)
+            .Where(item =>
+            {
+                try
+                {
+                    return privateIndexes.Contains(
+                        item.GetIPProperties().GetIPv4Properties()?.Index ?? -1);
+                }
+                catch (NetworkInformationException)
+                {
+                    return false;
+                }
+            })
             .SelectMany(item => item.GetIPProperties().UnicastAddresses)
             .Where(item => item.Address.AddressFamily == AddressFamily.InterNetwork &&
                            item.DuplicateAddressDetectionState == DuplicateAddressDetectionState.Preferred &&
@@ -131,6 +154,44 @@ public partial class DevicePairingWindow : Window
             .Select(item => item.Address.ToString())
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+    }
+
+    private static HashSet<int> GetPrivateNetworkInterfaceIndexes()
+    {
+        try
+        {
+            var powershell = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                @"WindowsPowerShell\v1.0\powershell.exe");
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = powershell,
+                Arguments =
+                    "-NoProfile -NonInteractive -Command " +
+                    "\"Get-NetConnectionProfile | Where-Object NetworkCategory -eq 'Private' | " +
+                    "Select-Object -ExpandProperty InterfaceIndex\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
+            if (process is null || !process.WaitForExit(3000))
+            {
+                try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
+                return [];
+            }
+            return process.StandardOutput.ReadToEnd()
+                .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(value => int.TryParse(value, out var index) ? index : -1)
+                .Where(index => index >= 0)
+                .ToHashSet();
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return [];
+        }
     }
 
     private static int AddressPriority(IPAddress address)

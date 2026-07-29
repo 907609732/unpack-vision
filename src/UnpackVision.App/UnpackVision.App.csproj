@@ -9,7 +9,7 @@
     <ApplicationIcon>Assets\EcommerceUnpackRecorder.ico</ApplicationIcon>
     <Product>电商拆包智能录像</Product>
     <Description>电商拆包录像、手机协同与数据同步</Description>
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
     <StartupObject>UnpackVision.App.Program</StartupObject>
   </PropertyGroup>
   <ItemGroup>

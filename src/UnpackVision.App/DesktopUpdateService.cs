@@ -1,4 +1,6 @@
 using System.IO;
+using System.Net.Http;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Velopack;
 using Velopack.Sources;
@@ -10,11 +12,24 @@ internal sealed record DesktopUpdateStatus(
     string? AvailableVersion = null,
     int? Progress = null,
     bool ReadyToInstall = false,
-    bool IsChecking = false);
+    bool IsChecking = false,
+    bool IsCritical = false,
+    string? ReleaseNotesUrl = null);
+
+internal sealed record DesktopUpdateManifest(
+    string Version,
+    bool Critical,
+    string? MinimumSupportedVersion,
+    string? ReleaseNotesUrl,
+    DateTimeOffset? PublishedAt);
 
 internal sealed class DesktopUpdateService
 {
     private static readonly TimeSpan AutomaticCheckInterval = TimeSpan.FromHours(6);
+    private static readonly HttpClient MetadataClient = new()
+    {
+        Timeout = TimeSpan.FromSeconds(10)
+    };
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly UpdateManager _manager;
     private readonly string _statePath;
@@ -31,7 +46,7 @@ internal sealed class DesktopUpdateService
         Status = new DesktopUpdateStatus(
             _manager.IsInstalled
                 ? $"当前版本 {ProductInfo.Version}"
-                : "当前为便携调试版；安装正式版后可自动更新");
+                : "当前为便携调试版；安装正式版后可启用自动更新");
     }
 
     internal event EventHandler<DesktopUpdateStatus>? StatusChanged;
@@ -43,10 +58,12 @@ internal sealed class DesktopUpdateService
     {
         if (!_manager.IsInstalled)
         {
-            SetStatus(new DesktopUpdateStatus("当前为便携调试版；请从 GitHub 安装正式版以启用自动更新"));
+            SetStatus(new DesktopUpdateStatus(
+                "当前为便携调试版；请从 GitHub 安装正式版以启用自动更新"));
             return;
         }
-        if (!force && _lastCheckAt is { } last && DateTimeOffset.Now - last < AutomaticCheckInterval)
+        if (!force && _lastCheckAt is { } last &&
+            DateTimeOffset.Now - last < AutomaticCheckInterval)
         {
             return;
         }
@@ -63,24 +80,40 @@ internal sealed class DesktopUpdateService
             SaveLastCheck(_lastCheckAt.Value);
             if (update is null)
             {
-                SetStatus(new DesktopUpdateStatus($"当前已是最新版 {ProductInfo.Version}"));
+                SetStatus(new DesktopUpdateStatus($"当前已是最新版本 {ProductInfo.Version}"));
                 return;
             }
 
             var version = update.TargetFullRelease.Version.ToString();
-            SetStatus(new DesktopUpdateStatus($"发现新版本 {version}，正在后台下载…", version, 0));
+            var metadata = await TryReadManifestAsync(cancellationToken);
+            var critical = metadata?.Critical == true &&
+                           string.Equals(metadata.Version, version, StringComparison.OrdinalIgnoreCase);
+            var notesUrl = metadata?.ReleaseNotesUrl ?? ProductInfo.LatestReleaseUrl;
+            var importance = critical ? "安全更新" : "新版本";
+            SetStatus(new DesktopUpdateStatus(
+                $"发现{importance} {version}，正在后台下载…",
+                version,
+                0,
+                IsCritical: critical,
+                ReleaseNotesUrl: notesUrl));
             await _manager.DownloadUpdatesAsync(
                 update,
                 progress => SetStatus(new DesktopUpdateStatus(
                     $"正在下载版本 {version}：{progress}%",
                     version,
-                    progress)),
+                    progress,
+                    IsCritical: critical,
+                    ReleaseNotesUrl: notesUrl)),
                 cancellationToken);
             SetStatus(new DesktopUpdateStatus(
-                $"版本 {version} 已下载，空闲时可以重启更新",
+                critical
+                    ? $"安全更新 {version} 已下载，请在空闲时尽快重启安装"
+                    : $"版本 {version} 已下载，可在空闲时重启安装",
                 version,
                 100,
-                ReadyToInstall: true));
+                ReadyToInstall: true,
+                IsCritical: critical,
+                ReleaseNotesUrl: notesUrl));
             UpdateReady?.Invoke(this, EventArgs.Empty);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -103,6 +136,22 @@ internal sealed class DesktopUpdateService
             ?? throw new InvalidOperationException("没有已下载并等待安装的更新");
         BackupUserState(pending.Version.ToString());
         _manager.ApplyUpdatesAndRestart(pending);
+    }
+
+    private static async Task<DesktopUpdateManifest?> TryReadManifestAsync(
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await MetadataClient.GetFromJsonAsync<DesktopUpdateManifest>(
+                ProductInfo.DesktopManifestUrl,
+                cancellationToken);
+        }
+        catch (Exception exception) when (
+            exception is HttpRequestException or JsonException or TaskCanceledException)
+        {
+            return null;
+        }
     }
 
     private void SetStatus(DesktopUpdateStatus status)

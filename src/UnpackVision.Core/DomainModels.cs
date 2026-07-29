@@ -106,6 +106,33 @@ public sealed class ScanRecord
     }
 }
 
+public sealed class ConsentState
+{
+    public string TermsVersion { get; set; } = string.Empty;
+    public string PrivacyPolicyVersion { get; set; } = string.Empty;
+    public DateTimeOffset? AcceptedAt { get; set; }
+    public bool OptionalUsageTelemetryEnabled { get; set; }
+    public DateTimeOffset? OptionalUsageTelemetryWithdrawnAt { get; set; }
+
+    public bool IsCurrent(string termsVersion, string privacyPolicyVersion) =>
+        AcceptedAt is not null &&
+        string.Equals(TermsVersion, termsVersion, StringComparison.Ordinal) &&
+        string.Equals(PrivacyPolicyVersion, privacyPolicyVersion, StringComparison.Ordinal);
+}
+
+public sealed class DonationProfile
+{
+    public string DeveloperName { get; set; } = "五成";
+    public string AlipayQrAsset { get; set; } = string.Empty;
+    public string AlipayQrSha256 { get; set; } = string.Empty;
+    public string WeChatQrAsset { get; set; } = string.Empty;
+    public string WeChatQrSha256 { get; set; } = string.Empty;
+
+    public bool IsConfigured =>
+        !string.IsNullOrWhiteSpace(AlipayQrAsset) ||
+        !string.IsNullOrWhiteSpace(WeChatQrAsset);
+}
+
 public sealed record IssueTagDefinition
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8].ToUpperInvariant();

@@ -19,6 +19,8 @@ public sealed class LocalSettings
     public bool FaceZoomEnabled { get; set; }
     public bool CaptureSnapshotOnIssueTag { get; set; }
     public bool AutoCheckUpdates { get; set; } = true;
+    public ConsentState Consent { get; set; } = new();
+    public DonationProfile Donation { get; set; } = new();
     public List<IssueTagDefinition> IssueTags { get; set; } = IssueTagDefaults.Create();
 }
 
@@ -53,6 +55,8 @@ public sealed class LocalSettingsStore
         {
             settings.IssueTags = IssueTagDefaults.Create();
         }
+        settings.Consent ??= new ConsentState();
+        settings.Donation ??= new DonationProfile();
         if (settings.Scanner.MinimumLength == 6 &&
             settings.Scanner.MaximumLength == 40 &&
             settings.Scanner.DebounceMilliseconds == 80)

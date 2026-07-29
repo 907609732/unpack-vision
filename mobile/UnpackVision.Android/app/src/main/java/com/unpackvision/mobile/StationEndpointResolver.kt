@@ -44,10 +44,10 @@ class StationEndpointResolver(
             )?.let { return@withContext it }
 
             val candidates = linkedMapOf<String, StationTransport>()
-            addCandidate(candidates, "http://127.0.0.1:$STATION_PORT", StationTransport.UsbDebug)
+            addCandidate(candidates, "http://127.0.0.1:$LOOPBACK_PORT", StationTransport.UsbDebug)
 
             gatewayAddresses().forEach {
-                addCandidate(candidates, "http://$it:$STATION_PORT", StationTransport.HotspotOrTethering)
+                addCandidate(candidates, "https://$it:$LAN_TLS_PORT", StationTransport.HotspotOrTethering)
             }
 
             findNsdStation(credential.stationId)?.let {
@@ -79,7 +79,8 @@ class StationEndpointResolver(
                 address,
                 credential.stationId,
                 credential.deviceId,
-                credential.accessToken
+                credential.accessToken,
+                credential.certificateFingerprint
             )
         }.getOrNull() ?: return null
 
@@ -108,8 +109,8 @@ class StationEndpointResolver(
             .trim('-')
         if (host.isBlank()) return emptyList()
         return listOf(
-            "http://$host.local:$STATION_PORT",
-            "http://$host:$STATION_PORT"
+            "https://$host.local:$LAN_TLS_PORT",
+            "https://$host:$LAN_TLS_PORT"
         )
     }
 
@@ -144,7 +145,8 @@ class StationEndpointResolver(
                             return
                         }
                         val host = serviceInfo.host?.hostAddress ?: return
-                        complete("http://$host:${serviceInfo.port}")
+                        val tls = serviceInfo.attributes["tls"]?.toString(Charsets.UTF_8)
+                        if (tls == "1") complete("https://$host:${serviceInfo.port}")
                     }
                 }
 
@@ -190,7 +192,8 @@ class StationEndpointResolver(
     }
 
     private companion object {
-        const val STATION_PORT = 5271
+        const val LOOPBACK_PORT = 5271
+        const val LAN_TLS_PORT = 5273
         const val SERVICE_TYPE = "_unpackvision._tcp."
         const val NSD_TIMEOUT_MILLISECONDS = 2_000L
     }

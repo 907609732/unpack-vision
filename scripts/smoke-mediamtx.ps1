@@ -1,15 +1,30 @@
 [CmdletBinding()]
-param()
+param(
+    [switch]$KeepArtifacts
+)
 
 $ErrorActionPreference = "Stop"
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+$systemTempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+Get-ChildItem -LiteralPath $systemTempRoot -Directory -Filter 'UnpackVision-MediaSmoke-*' |
+    Where-Object LastWriteTimeUtc -lt ([DateTime]::UtcNow.AddMinutes(-2)) |
+    ForEach-Object {
+        $stale = [System.IO.Path]::GetFullPath($_.FullName)
+        if (-not $stale.StartsWith($systemTempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Unsafe stale smoke-test cleanup target: $stale"
+        }
+        Remove-Item -LiteralPath $stale -Recurse -Force
+    }
 $testId = [Guid]::NewGuid().ToString("N")
 $temporaryRoot = Join-Path ([System.IO.Path]::GetTempPath()) "UnpackVision-MediaSmoke-$testId"
 [System.IO.Directory]::CreateDirectory($temporaryRoot) | Out-Null
 $databasePath = Join-Path $temporaryRoot "station.db"
 $relayRoot = Join-Path $temporaryRoot "relay"
+$securityRoot = Join-Path $temporaryRoot "security"
 $hostOutputDirectory = Join-Path $repositoryRoot "src\UnpackVision.StationHost\bin\Release\net10.0-windows"
 $hostExecutable = Get-ChildItem -LiteralPath $hostOutputDirectory -Filter "*.exe" -File |
+    Where-Object Name -ne 'createdump.exe' |
+    Sort-Object Length -Descending |
     Select-Object -First 1 -ExpandProperty FullName
 $mediaExecutable = Join-Path $repositoryRoot "tools\mediamtx\1.18.2\mediamtx.exe"
 $hostProcess = $null
@@ -18,6 +33,9 @@ try {
     $arguments = @(
         "--urls", "http://127.0.0.1:5271",
         "--Storage:DatabasePath=$databasePath",
+        "--Storage:RecordingRoot=$temporaryRoot\videos",
+        "--StationHost:SecurityDirectory=$securityRoot",
+        "--StationHost:StationId=media-smoke",
         "--MediaRelay:RuntimeDirectory=$relayRoot",
         "--MediaRelay:ExecutablePath=$mediaExecutable"
     )
@@ -88,7 +106,7 @@ try {
         -ContentType "application/json" `
         -Body $authBody `
         -TimeoutSec 5
-    $stationId = [uri]::EscapeDataString($health.station.stationId)
+    $stationId = [uri]::EscapeDataString('media-smoke')
     $stationState = Invoke-RestMethod `
         -Uri "http://127.0.0.1:5271/api/v1/stations/$stationId/state" `
         -Headers $headers `
@@ -100,7 +118,7 @@ try {
 
     [pscustomobject]@{
         StationHealthy = $health.status
-        MediaRelayRunning = $publish.rtspUrl -like "rtsp://*"
+        MediaRelayRunning = $publish.rtspUrl -like "rtsps://*"
         RelayVersion = $relayInfo.version
         PublishPath = $publish.streamPath
         PublishUrl = $publish.rtspUrl
@@ -118,5 +136,16 @@ finally {
     Get-CimInstance Win32_Process |
         Where-Object { $_.Name -eq "mediamtx.exe" -and $_.CommandLine -like "*$testId*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId }
-    Write-Host "Smoke-test artifacts: $temporaryRoot"
+    if ($KeepArtifacts) {
+        Write-Host "Smoke-test artifacts: $temporaryRoot"
+    }
+    else {
+        $resolvedTemporaryRoot = [System.IO.Path]::GetFullPath($temporaryRoot)
+        if (-not $resolvedTemporaryRoot.StartsWith(
+                $systemTempRoot,
+                [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Unsafe smoke-test cleanup target: $resolvedTemporaryRoot"
+        }
+        Remove-Item -LiteralPath $resolvedTemporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }

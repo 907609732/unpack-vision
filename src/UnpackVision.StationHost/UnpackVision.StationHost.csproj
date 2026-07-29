@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>电商拆包智能录像工位主机</AssemblyName>
-    <Version>2.1.0</Version>
+    <Version>2.2.0</Version>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../UnpackVision.Core/UnpackVision.Core.csproj" />

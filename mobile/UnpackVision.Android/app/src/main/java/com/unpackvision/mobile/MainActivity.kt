@@ -2,6 +2,7 @@ package com.unpackvision.mobile
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.SurfaceView
@@ -13,6 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -52,8 +54,10 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -63,6 +67,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import java.security.MessageDigest
 import java.util.UUID
 
 enum class WorkMode(val title: String, val subtitle: String, val contractName: String) {
@@ -91,6 +96,19 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun UnpackVisionApp() {
     val context = LocalContext.current
+    val appPreferences = remember { AppPreferences(context) }
+    var consentAccepted by remember { mutableStateOf(appPreferences.hasCurrentConsent) }
+    if (!consentAccepted) {
+        ConsentWorkspace {
+            appPreferences.acceptCurrentLegalDocuments()
+            UpdateCheckWorker.schedule(context)
+            consentAccepted = true
+        }
+        return
+    }
+    LaunchedEffect(Unit) {
+        UpdateCheckWorker.schedule(context)
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val api = remember { StationApiClient() }
@@ -99,12 +117,13 @@ private fun UnpackVisionApp() {
     var selectedMode by remember { mutableStateOf<WorkMode?>(null) }
     var pairingOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var donationOpen by remember { mutableStateOf(false) }
+    var legalDocument by remember { mutableStateOf<Pair<String, String>?>(null) }
     var credential by remember { mutableStateOf(credentialStore.load()) }
     var homeConnectionState by remember {
         mutableStateOf(if (credential == null) ComputerConnectionState.NotPaired else ComputerConnectionState.Checking)
     }
     var homeConnectionMessage by remember { mutableStateOf(credential?.stationId ?: "点击扫描电脑上的配对二维码") }
-    val appPreferences = remember { AppPreferences(context) }
     var mainCameraOnly by remember { mutableStateOf(appPreferences.mainCameraOnly) }
 
     suspend fun refreshHomeConnection() {
@@ -150,6 +169,12 @@ private fun UnpackVisionApp() {
     }
 
     when {
+        legalDocument != null -> LegalWorkspace(
+            legalDocument!!.first,
+            legalDocument!!.second,
+            onBack = { legalDocument = null }
+        )
+        donationOpen -> DonationWorkspace(onBack = { donationOpen = false })
         pairingOpen -> PairingWorkspace(
             onBack = { pairingOpen = false },
             onPaired = {
@@ -167,7 +192,10 @@ private fun UnpackVisionApp() {
                 appPreferences.mainCameraOnly = it
             },
             onBack = { settingsOpen = false },
-            onPair = { pairingOpen = true; settingsOpen = false }
+            onPair = { pairingOpen = true; settingsOpen = false },
+            onTerms = { legalDocument = "用户协议" to MobileLegalDocuments.TERMS },
+            onPrivacy = { legalDocument = "隐私政策" to MobileLegalDocuments.PRIVACY },
+            onDonation = { donationOpen = true }
         )
         selectedMode != null -> ModeWorkspace(
             selectedMode!!,
@@ -215,7 +243,7 @@ private fun HomeWorkspace(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("电商拆包智能录像", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-                Text("安卓协同端 · 2.1.0", color = Color(0xFF6E6E73))
+                Text("安卓协同端 · ${BuildConfig.VERSION_NAME}", color = Color(0xFF6E6E73))
             }
             OutlinedButton(onClick = onSettings) { Text("设置") }
         }
@@ -255,12 +283,205 @@ private fun HomeWorkspace(
 }
 
 @Composable
+private fun ConsentWorkspace(onAccepted: () -> Unit) {
+    var requiredAccepted by remember { mutableStateOf(false) }
+    var openedDocument by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    openedDocument?.let { document ->
+        LegalWorkspace(document.first, document.second) { openedDocument = null }
+        return
+    }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF4F6FA))
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Spacer(Modifier.height(12.dp))
+        Text("欢迎使用", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+        Text("电商拆包智能录像", style = MaterialTheme.typography.titleLarge, color = Color(0xFF3478F6))
+        Card(colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("请先了解本地数据处理方式", fontWeight = FontWeight.SemiBold)
+                Text(
+                    "单号、录像、Excel、备注和配对信息默认只保存在您的设备；自动更新只访问 GitHub，手机与电脑只在局域网传输。",
+                    color = Color(0xFF6E6E73)
+                )
+                Text(
+                    "面单和录像可能包含个人信息，请自行控制访问权限、保存期限和合法使用范围。",
+                    color = Color(0xFFFF9500)
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(
+                onClick = { openedDocument = "用户协议" to MobileLegalDocuments.TERMS },
+                modifier = Modifier.weight(1f)
+            ) { Text("用户协议") }
+            OutlinedButton(
+                onClick = { openedDocument = "隐私政策" to MobileLegalDocuments.PRIVACY },
+                modifier = Modifier.weight(1f)
+            ) { Text("隐私政策") }
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
+            Row(
+                Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(checked = requiredAccepted, onCheckedChange = { requiredAccepted = it })
+                Text("我已阅读并同意《用户协议》和《隐私政策》", modifier = Modifier.weight(1f))
+            }
+        }
+        Text(
+            "2.2.0 不启用匿名统计，也不会生成稳定安装标识。今后如增加可选统计，将另行征得同意。",
+            color = Color(0xFF6E6E73),
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(Modifier.weight(1f))
+        Button(
+            onClick = onAccepted,
+            enabled = requiredAccepted,
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("同意并进入应用") }
+    }
+}
+
+@Composable
+private fun LegalWorkspace(title: String, body: String, onBack: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF4F6FA))
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(20.dp)
+    ) {
+        FeatureHeader(onBack, title, "版本 2026-07-29")
+        Spacer(Modifier.height(16.dp))
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Text(
+                body.trimIndent(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(18.dp),
+                color = Color(0xFF3A3A3C)
+            )
+        }
+    }
+}
+
+@Composable
+private fun DonationWorkspace(onBack: () -> Unit) {
+    val profile = remember { MobileDonationProfile() }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xFFF4F6FA))
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        FeatureHeader(onBack, "支持作者", "自愿赞助，不影响任何软件功能")
+        InfoCard("开发者", profile.developerName)
+        DonationQrCard("支付宝", profile.alipayDrawableName, profile.alipaySha256)
+        DonationQrCard("微信", profile.weChatDrawableName, profile.weChatSha256)
+        Text(
+            "付款完全由支付宝或微信处理。本软件不接入支付 SDK，不读取付款金额、账号、订单或付款结果。",
+            color = Color(0xFF6E6E73)
+        )
+    }
+}
+
+@Composable
+private fun DonationQrCard(channel: String, drawableName: String, expectedSha256: String) {
+    val context = LocalContext.current
+    val drawableId = remember(drawableName, expectedSha256) {
+        validateDonationDrawable(context, drawableName, expectedSha256)
+    }
+    Card(colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(channel, fontWeight = FontWeight.SemiBold)
+            Box(
+                Modifier
+                    .size(230.dp)
+                    .background(Color(0xFFF2F2F7), RoundedCornerShape(18.dp))
+                    .border(1.dp, Color(0xFFD1D1D6), RoundedCornerShape(18.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                if (drawableId != null) {
+                    Image(
+                        painter = painterResource(drawableId),
+                        contentDescription = "$channel 赞助二维码",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(12.dp)
+                    )
+                } else {
+                    Text(
+                        if (drawableName.isBlank()) "作者暂未配置" else "二维码校验失败",
+                        color = Color(0xFF8E8E93)
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun validateDonationDrawable(
+    context: android.content.Context,
+    drawableName: String,
+    expectedSha256: String
+): Int? {
+    if (drawableName.isBlank() || expectedSha256.isBlank()) return null
+    val resourceId = context.resources.getIdentifier(
+        drawableName,
+        "drawable",
+        context.packageName
+    )
+    if (resourceId == 0) return null
+    return runCatching {
+        val actual = context.resources.openRawResource(resourceId).use { input ->
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(8192)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+            digest.digest().joinToString("") { "%02x".format(it) }
+        }
+        resourceId.takeIf { actual.equals(expectedSha256, ignoreCase = true) }
+    }.getOrNull()
+}
+
+@Composable
 private fun SettingsWorkspace(
     credential: StoredDeviceCredential?,
     mainCameraOnly: Boolean,
     onMainCameraOnlyChanged: (Boolean) -> Unit,
     onBack: () -> Unit,
-    onPair: () -> Unit
+    onPair: () -> Unit,
+    onTerms: () -> Unit,
+    onPrivacy: () -> Unit,
+    onDonation: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -269,6 +490,13 @@ private fun SettingsWorkspace(
     var availableUpdate by remember { mutableStateOf<MobileUpdateManifest?>(null) }
     var checkingUpdate by remember { mutableStateOf(false) }
     var downloadedApk by remember { mutableStateOf<java.io.File?>(null) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { }
+    val notificationPermissionMissing =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
 
     fun checkUpdate(force: Boolean) {
         if (checkingUpdate) return
@@ -280,7 +508,11 @@ private fun SettingsWorkspace(
                 MobileUpdateResult.Current -> updateStatus = "当前已经是最新版本"
                 is MobileUpdateResult.Available -> {
                     availableUpdate = result.manifest
-                    updateStatus = "发现新版本 ${result.manifest.versionName}"
+                    updateStatus = if (result.manifest.critical) {
+                        "发现安全更新 ${result.manifest.versionName}，建议尽快安装"
+                    } else {
+                        "发现新版本 ${result.manifest.versionName}"
+                    }
                 }
                 is MobileUpdateResult.Failed -> updateStatus = "检查失败：${result.message}"
             }
@@ -302,7 +534,7 @@ private fun SettingsWorkspace(
     ) {
         FeatureHeader(onBack, "设置", "连接信息、软件版本与开发者信息")
         InfoCard("软件名称", "电商拆包智能录像")
-        InfoCard("版本号", "2.1.0")
+        InfoCard("版本号", BuildConfig.VERSION_NAME)
         InfoCard("开发者", "五成")
         InfoCard("电脑工位", credential?.stationId ?: "尚未配对")
         InfoCard("连接兜底", "局域网自动发现 / 手机热点 / USB或蓝牙网络共享 / USB调试直连")
@@ -336,6 +568,14 @@ private fun SettingsWorkspace(
                         onClick = { updateManager.open(AppUpdateManager.RELEASE_URL) },
                         modifier = Modifier.weight(1f)
                     ) { Text("版本页面") }
+                }
+                if (notificationPermissionMissing) {
+                    OutlinedButton(
+                        onClick = {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("允许版本更新通知") }
                 }
                 availableUpdate?.let { manifest ->
                     Button(
@@ -388,6 +628,21 @@ private fun SettingsWorkspace(
                         modifier = Modifier.weight(1f)
                     ) { Text("下载 APK") }
                 }
+            }
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("隐私、安全与支持", fontWeight = FontWeight.SemiBold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onTerms, modifier = Modifier.weight(1f)) { Text("用户协议") }
+                    OutlinedButton(onClick = onPrivacy, modifier = Modifier.weight(1f)) { Text("隐私政策") }
+                }
+                Button(onClick = onDonation, modifier = Modifier.fillMaxWidth()) { Text("支持作者") }
+                Text(
+                    "安全问题请通过 GitHub Private Vulnerability Reporting 私密报告。",
+                    color = Color(0xFF6E6E73),
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
         Text(
@@ -621,7 +876,10 @@ private fun ModeWorkspace(
             if (!command.stationId.equals(stationId, ignoreCase = true)) continue
             api.submitScan(
                 stationAddress, command.stationId, deviceId, accessToken, command.value,
-                WorkMode.ScanCollection, eventId = command.eventId, detectedAt = command.detectedAt
+                WorkMode.ScanCollection,
+                activeCredential?.certificateFingerprint ?: credential.certificateFingerprint,
+                eventId = command.eventId,
+                detectedAt = command.detectedAt
             )
             offlineQueue.remove(command.eventId)
             sent++
@@ -647,7 +905,12 @@ private fun ModeWorkspace(
             }
             stationId = resolved.state.stationId
             if (mode == WorkMode.SmartCamera) {
-                api.createPublishSession(stationAddress, deviceId, accessToken!!)
+                api.createPublishSession(
+                    stationAddress,
+                    deviceId,
+                    accessToken!!,
+                    activeCredential?.certificateFingerprint ?: credential.certificateFingerprint
+                )
             } else null
         }.onSuccess { endpoint ->
             connectionState = ComputerConnectionState.Connected
@@ -689,13 +952,21 @@ private fun ModeWorkspace(
                 feedback.error("电脑未连接")
                 return@launch
             }
-            Log.i(SCAN_LOG_TAG, "Submitting remote command $command to $stationAddress")
+            Log.i(SCAN_LOG_TAG, "Submitting remote command to paired station")
             val acknowledgement = runCatching {
-                api.submitScan(stationAddress, stationId, deviceId, accessToken, command, WorkMode.IssueRemote)
+                api.submitScan(
+                    stationAddress,
+                    stationId,
+                    deviceId,
+                    accessToken,
+                    command,
+                    WorkMode.IssueRemote,
+                    activeCredential?.certificateFingerprint ?: credential!!.certificateFingerprint
+                )
             }.onSuccess {
-                Log.i(SCAN_LOG_TAG, "Computer acknowledged remote command $command: $it")
+                Log.i(SCAN_LOG_TAG, "Computer acknowledged remote command")
             }.onFailure {
-                Log.e(SCAN_LOG_TAG, "Remote command failed for $command", it)
+                Log.e(SCAN_LOG_TAG, "Remote command failed", it)
             }.getOrElse { "发送失败：${it.message}" }
             refreshRemoteState()
             status = acknowledgement
@@ -712,6 +983,8 @@ private fun ModeWorkspace(
                 streamAddress = streamAddress,
                 streamAuthUser = streamAuthUser,
                 streamAuthToken = accessToken,
+                certificateFingerprint =
+                    activeCredential?.certificateFingerprint ?: credential?.certificateFingerprint.orEmpty(),
                 torchEnabled = torchEnabled,
                 modifier = Modifier.fillMaxSize(),
                 onStreamingChanged = { streamingActive = it },
@@ -741,14 +1014,23 @@ private fun ModeWorkspace(
                         }
                     } else {
                         status = "电脑处理中：$value"
-                        Log.i(SCAN_LOG_TAG, "Submitting barcode $value to $stationAddress")
+                        Log.i(SCAN_LOG_TAG, "Submitting barcode ending ${value.takeLast(4)}")
                         scope.launch {
                             val acknowledgement = runCatching {
-                                api.submitScan(stationAddress, stationId, deviceId, accessToken, value, mode)
+                                api.submitScan(
+                                    stationAddress,
+                                    stationId,
+                                    deviceId,
+                                    accessToken,
+                                    value,
+                                    mode,
+                                    activeCredential?.certificateFingerprint
+                                        ?: credential.certificateFingerprint
+                                )
                             }.onSuccess {
-                                Log.i(SCAN_LOG_TAG, "Computer acknowledged barcode $value: $it")
+                                Log.i(SCAN_LOG_TAG, "Computer acknowledged barcode")
                             }.onFailure {
-                                Log.e(SCAN_LOG_TAG, "Barcode submission failed for $value", it)
+                                Log.e(SCAN_LOG_TAG, "Barcode submission failed", it)
                             }.getOrElse { "发送失败：${it.message}" }
                             refreshRemoteState(preserveStatus = true)
                             status = acknowledgement
@@ -815,6 +1097,7 @@ private fun CameraWorkspace(
     streamAddress: String,
     streamAuthUser: String,
     streamAuthToken: String?,
+    certificateFingerprint: String,
     torchEnabled: Boolean,
     modifier: Modifier = Modifier,
     onStreamingChanged: (Boolean) -> Unit = {},
@@ -832,6 +1115,7 @@ private fun CameraWorkspace(
         CameraPipelineController(
             context,
             mainCameraOnly = mainCameraOnly,
+            certificateFingerprint = certificateFingerprint,
             onBarcode = { currentOnBarcode.value(it) },
             onStatus = { currentOnStatus.value(it) },
             onBitrate = { currentOnBitrate.value(it) },

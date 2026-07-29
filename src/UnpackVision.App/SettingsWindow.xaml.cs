@@ -137,6 +137,8 @@ public partial class SettingsWindow : Window
                 FaceZoomEnabled = _source.FaceZoomEnabled,
                 CaptureSnapshotOnIssueTag = CaptureIssueSnapshotCheck.IsChecked == true,
                 AutoCheckUpdates = AutoUpdateCheck.IsChecked == true,
+                Consent = _source.Consent,
+                Donation = _source.Donation,
                 IssueTags = ValidateIssueTags(),
                 Scanner = _source.Scanner with
                 {
@@ -202,9 +204,61 @@ public partial class SettingsWindow : Window
             "repository" => ProductInfo.RepositoryUrl,
             "windows" => ProductInfo.WindowsDownloadUrl,
             "android" => ProductInfo.AndroidDownloadUrl,
+            "security" => LegalDocuments.SecurityUrl,
             _ => ProductInfo.LatestReleaseUrl
         };
         Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+    }
+
+    private void OpenTerms_OnClick(object sender, RoutedEventArgs e) =>
+        new LegalDocumentWindow("用户协议", LegalDocuments.TermsText) { Owner = this }.ShowDialog();
+
+    private void OpenPrivacy_OnClick(object sender, RoutedEventArgs e) =>
+        new LegalDocumentWindow("隐私政策", LegalDocuments.PrivacyText) { Owner = this }.ShowDialog();
+
+    private void OpenDonation_OnClick(object sender, RoutedEventArgs e) =>
+        new DonationWindow(_source.Donation) { Owner = this }.ShowDialog();
+
+    private void ConfigureFirewall_OnClick(object sender, RoutedEventArgs e)
+    {
+        var script = Path.Combine(
+            AppContext.BaseDirectory,
+            "Scripts",
+            "configure-private-firewall.ps1");
+        if (!File.Exists(script))
+        {
+            MessageBox.Show(this, "当前便携调试目录不包含防火墙配置脚本，请使用完整安装版。", "防火墙配置");
+            return;
+        }
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo
+            {
+                FileName = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    @"WindowsPowerShell\v1.0\powershell.exe"),
+                Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{script}\"",
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden
+            });
+            process?.WaitForExit();
+            if (process?.ExitCode == 0)
+            {
+                MessageBox.Show(
+                    this,
+                    "已仅为 Windows“专用网络”放行手机协同端口；公共网络仍然禁止。",
+                    "防火墙配置完成");
+            }
+            else
+            {
+                MessageBox.Show(this, "防火墙配置未完成，请确认管理员授权。", "防火墙配置");
+            }
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            MessageBox.Show(this, "已取消管理员授权，防火墙没有改动。", "防火墙配置");
+        }
     }
 
     private void Updates_OnStatusChanged(object? sender, DesktopUpdateStatus status) =>

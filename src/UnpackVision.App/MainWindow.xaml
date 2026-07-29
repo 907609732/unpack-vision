@@ -47,6 +47,34 @@
       <RowDefinition x:Name="FooterRow" Height="34" />
     </Grid.RowDefinitions>
 
+    <Border x:Name="UpdateBanner" Grid.Row="2" Panel.ZIndex="50"
+            VerticalAlignment="Top" Margin="28,16,28,0" Padding="16,12"
+            Background="#F2EAF5FF" BorderBrush="#663478F6" BorderThickness="1"
+            CornerRadius="16" Visibility="Collapsed" Effect="{StaticResource FloatingShadow}">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBlock x:Name="UpdateBannerIcon" Text="&#xE895;" FontFamily="Segoe Fluent Icons"
+                   FontSize="18" Foreground="#3478F6" VerticalAlignment="Center" Margin="0,0,12,0" />
+        <StackPanel Grid.Column="1">
+          <TextBlock x:Name="UpdateBannerTitle" Text="发现新版本" FontWeight="SemiBold" />
+          <TextBlock x:Name="UpdateBannerMessage" Foreground="#5E6573" Margin="0,3,0,0"
+                     TextWrapping="Wrap" />
+        </StackPanel>
+        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="14,0,0,0">
+          <Button Content="更新说明" Style="{StaticResource SecondaryButton}" Padding="12,6"
+                  Click="UpdateNotesButton_OnClick" />
+          <Button x:Name="UpdateInstallButton" Content="重启并安装" Padding="13,6" Margin="8,0,0,0"
+                  Click="UpdateInstallButton_OnClick" />
+          <Button Content="稍后" Style="{StaticResource ToolbarButton}" Padding="10,6" Margin="4,0,0,0"
+                  Click="UpdateDismissButton_OnClick" />
+        </StackPanel>
+      </Grid>
+    </Border>
+
     <!-- Header: same navigation, quieter hierarchy. -->
     <Border x:Name="TopHeader" Grid.Row="0" Background="#F9FFFFFF" BorderBrush="#1C000000"
             BorderThickness="1" CornerRadius="22,22,0,0">
@@ -377,7 +405,7 @@
                  KeyDown="ScannerInput_OnKeyDown" />
         <TextBox x:Name="SyncStatusText" Text="Excel：等待任务" Style="{StaticResource SelectableText}" Foreground="#8C8C91" FontSize="10"
                    VerticalAlignment="Center" Margin="12,0,0,0" />
-        <TextBlock Text="版本 2.1.0 · 开发者 五成" Foreground="#A0A0A5" FontSize="10" VerticalAlignment="Center" Margin="14,0,0,0" />
+        <TextBlock Text="版本 2.2.0 · 开发者 五成" Foreground="#A0A0A5" FontSize="10" VerticalAlignment="Center" Margin="14,0,0,0" />
       </StackPanel>
     </Grid>
 

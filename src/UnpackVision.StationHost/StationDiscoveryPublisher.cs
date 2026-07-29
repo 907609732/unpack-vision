@@ -16,7 +16,7 @@ public sealed class StationDiscoveryPublisher(
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        if (!options.LanHttpPrototypeEnabled)
+        if (!options.LanHttpsEnabled)
         {
             return Task.CompletedTask;
         }
@@ -26,9 +26,10 @@ public sealed class StationDiscoveryPublisher(
             _profile = new ServiceProfile(
                 $"UnpackVision-{options.StationId}",
                 ServiceType,
-                5271);
+                checked((ushort)options.LanHttpsPort));
             _profile.AddProperty("stationId", options.StationId);
-            _profile.AddProperty("version", "2");
+            _profile.AddProperty("version", "3");
+            _profile.AddProperty("tls", "1");
 
             _discovery = new ServiceDiscovery();
             _discovery.Advertise(_profile);
@@ -36,7 +37,7 @@ public sealed class StationDiscoveryPublisher(
                 "Station {StationId} advertised as {ServiceType} on port {Port}.",
                 options.StationId,
                 ServiceType,
-                5271);
+                options.LanHttpsPort);
         }
         catch (Exception exception)
         {

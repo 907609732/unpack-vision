@@ -13,7 +13,7 @@
 - [最新版本与更新说明](https://github.com/907609732/unpack-vision/releases/latest)
 - [源码仓库](https://github.com/907609732/unpack-vision)
 
-Windows 端使用 Velopack 每用户安装器，后续更新由软件后台下载并在录像空闲、用户确认后安装，不需要手工覆盖旧文件。当前安装器尚未取得代码签名证书，首次下载可能出现 SmartScreen 提示；Release 同时提供 SHA256 和 GitHub 构建来源证明。
+Windows 端使用 Velopack 每用户安装器，后续更新由软件后台下载并在录像空闲、用户确认后安装，不需要手工覆盖旧文件。当前安装器尚未取得代码签名证书，只作为 Prerelease 提供，首次下载可能出现 SmartScreen 提示；Release 同时提供 SHA256 和 GitHub 构建来源证明。
 
 ## 当前可用能力
 
@@ -33,9 +33,9 @@ Windows 端使用 Velopack 每用户安装器，后续更新由软件后台下�
 - 离线图像能力：文档自动找边、透视矫正、旋转、彩色/灰度/黑白增强，以及本地一维码、二维码识别。
 - 默认不调用云端 OCR。OCR 接口已保留，但未部署本地模型时会明确返回“未配置”，不会上传面单或证件。
 
-## 2.1 安卓协同与开放工位
+## 2.2 隐私、安全与安卓协同
 
-2.0 正在开发，现已完成可运行的局域网协同主链路：
+2.2.0 已完成可运行的局域网协同主链路与首轮公开发布安全加固：
 
 - 新增常驻用户会话的 `UnpackVision.StationHost`，统一接收电脑、手机和未来网站的扫码命令。
 - 新增幂等 `IScanCommandRouter`；命令回执按幂等键保存在 SQLite，工位主机重启后重复事件仍返回原结果。手机扫码器可选择是否触发录像，关闭时可靠追加 Excel。
@@ -45,7 +45,7 @@ Windows 端使用 Velopack 每用户安装器，后续更新由软件后台下�
 - 已实现“三次稳定识别后发送、离开扫码区 1.2 秒后才允许同码再次触发”的防重复规则。
 - 桌面设置页可生成五分钟有效的一次性配对二维码，并允许在多网卡电脑上明确选择手机所在的局域网地址。
 - 每台手机生成独立密钥并用 Android Keystore 保护工位令牌；电脑数据库只保存令牌摘要。桌面端可查看已配对设备、角色、权限和最近在线时间，也可永久删除设备并立即断开其媒体会话。
-- MediaMTX 1.18.2 按需启动，手机自动申请设备专属 RTSP 推流路径；发布和读取分别验证 `camera:publish`、`video:read`，同时提供 WHEP 实时预览地址。
+- MediaMTX 1.18.2 按需启动，手机自动申请设备专属 RTSPS 推流路径；发布和读取分别验证 `camera:publish`、`video:read`，同时提供 HTTPS/WHEP 实时预览地址。
 - 工位主机已提供游标分页记录查询、记录事件时间线、缩略图和视频读取接口；视频支持 HTTP Range/206、ETag 和断点播放，接口只返回业务字段，不暴露电脑本机文件路径。
 - 局域网调试监听只绑定回环地址和当前可用的私有 IPv4 地址，不再占用所有网卡；配对页会排除 Windows 已失效或处于 Deprecated 状态的地址。
 - 2.0.1 增加 DNS-SD/mDNS 工位自动发现：保存的 IP 失效后，安卓端会依次尝试局域网自动发现、手机热点、USB/蓝牙网络共享及 USB 调试反向通道。
@@ -53,9 +53,9 @@ Windows 端使用 Velopack 每用户安装器，后续更新由软件后台下�
 - 电脑端在当前 Windows 用户登录后自动启动；手机会分别检测“工位服务在线”和“桌面录像程序已就绪”，不会再把只能连接但无法录像的状态显示为成功。
 - MediaMTX 由校验 SHA256 的脚本下载，不把第三方二进制提交到源码仓库；发布包会携带已校验二进制和上游许可证。
 
-2.1.0 提供固定 Release 签名 APK、GitHub Release 更新清单和 SHA256 校验。局域网 HTTP 原型已经完成设备令牌鉴权，但证书固定、RTSPS/WSS 与 30 秒断网分段恢复仍需继续完善，不能把调试接口直接开放到公网。
+2.2.0 提供固定 Release 签名 APK、GitHub Release 更新清单和 SHA256 校验。手机控制接口使用工位自签名证书的 HTTPS 并在安卓端固定 SHA256 指纹；媒体发布使用 RTSPS。旧明文配对凭据会在安全迁移时失效，需要重新扫码配对一次。USB 调试兜底只允许 `127.0.0.1` 回环明文，不允许局域网明文连接。
 
-Android Debug 构建仅为店内真机联调启用局域网明文 HTTP；Release 构建继续使用 Android 默认的明文禁用策略，正式发布前必须切换到证书固定的 HTTPS/WSS/RTSPS。
+首次启动会在相机、扫码和联网更新之前展示《用户协议》和《隐私政策》。2.2.0 的匿名统计接口为空实现，不生成稳定安装 ID；开发者只参考 GitHub Release 资源下载次数。设置页可查看协议、隐私政策、安全报告与“支持作者”，未配置真实赞赏码时不会显示测试二维码。
 
 工位主机首批开放接口：
 
@@ -116,7 +116,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-service.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run-service.ps1 -ShowApiKey
 ```
 
-除 `/api/v1/health` 和 OpenAPI 文档外，请求需携带：
+除最小化的 `/api/v1/health` 外，请求需携带：
 
 ```text
 X-UnpackVision-Key: <本机 API 密钥>
@@ -173,27 +173,29 @@ APK 输出到 `mobile\UnpackVision.Android\app\build\outputs\apk\debug\app-debug
 powershell -ExecutionPolicy Bypass -File .\scripts\fetch-mediamtx.ps1
 ```
 
-第一阶段实体手机联调时，可临时启用局域网 HTTP 监听。扫码和媒体接口仍强制验证每台设备的独立令牌；联调结束后关闭进程。正式版会替换为证书固定的 WSS/RTSPS：
-
-```powershell
-$env:StationHost__LanHttpPrototypeEnabled = 'true'
-dotnet run --project .\src\UnpackVision.StationHost -c Release
-```
+正式工位不提供局域网 HTTP 开关。开发调试的明文兜底仅通过 ADB 反向映射到手机自己的 `127.0.0.1`，不能从局域网访问。
 
 发布结果保存在 `artifacts\release-output`。Windows 安装器把桌面端、`StationHost`、兼容同步服务和带许可证的 MediaMTX 作为同一版本整体更新；安卓端生成固定文件名 APK、更新清单和 SHA256。
 
-生成完整 2.1.0 发布文件：
+生成完整 2.2.0 发布文件：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-signed-android.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1 `
-  -Version 2.1.0 `
+  -Version 2.2.0 `
   -AndroidApk .\mobile\UnpackVision.Android\app\build\outputs\apk\release\app-release.apk
 ```
 
 ## 许可证与独立实现声明
 
 本项目采用 [MIT License](LICENSE)。这是独立实现的软件，不包含 HIK SCAN 或海康威视的源代码、商标、界面素材及其他专有资源；相关产品名称仅用于说明兼容场景。
+
+隐私与安全资料：
+
+- [用户协议](docs/TERMS.md)
+- [隐私政策](docs/PRIVACY.md)
+- [安全报告与漏洞披露](SECURITY.md)
+- [2.2.0 安全审计记录](docs/SECURITY-AUDIT-2.2.0.md)
 
 ## 后续扩展点
 

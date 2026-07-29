@@ -172,7 +172,7 @@
         <ScrollViewer VerticalScrollBarVisibility="Auto">
           <StackPanel Margin="32">
             <TextBlock Text="电商拆包智能录像" FontSize="30" FontWeight="SemiBold" Foreground="#202124" />
-            <TextBox x:Name="AboutVersionText" Text="版本 2.1.0" Style="{StaticResource SelectableText}"
+            <TextBox x:Name="AboutVersionText" Text="版本 2.2.0" Style="{StaticResource SelectableText}"
                      Margin="0,10,0,0" FontSize="15" Foreground="#6E6E73" />
             <Border Background="#F3F6FC" CornerRadius="16" Padding="20" Margin="0,24,0,0">
               <StackPanel>
@@ -230,6 +230,26 @@
                             Tag="android" Click="OpenProductLink_OnClick" />
                   </StackPanel>
                 </DockPanel>
+              </StackPanel>
+            </Border>
+            <Border Background="#F8FAFD" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="16" Padding="18" Margin="0,14,0,0">
+              <StackPanel>
+                <TextBlock Text="隐私、安全与支持" FontSize="17" FontWeight="SemiBold" />
+                <TextBlock Margin="0,8,0,0" Foreground="#7D8494" TextWrapping="Wrap"
+                           Text="可随时查看本版本协议。2.2.0 不启用匿名使用统计，拒绝未来的可选统计也不会影响核心功能。" />
+                <WrapPanel Margin="0,13,0,0">
+                  <Button Content="用户协议" Style="{StaticResource SecondaryButton}"
+                          Padding="13,6" Click="OpenTerms_OnClick" />
+                  <Button Content="隐私政策" Style="{StaticResource SecondaryButton}"
+                          Padding="13,6" Margin="8,0,0,0" Click="OpenPrivacy_OnClick" />
+                  <Button Content="安全与漏洞报告" Style="{StaticResource SecondaryButton}"
+                          Padding="13,6" Margin="8,0,0,0" Tag="security" Click="OpenProductLink_OnClick" />
+                  <Button Content="配置专用网络防火墙" Style="{StaticResource SecondaryButton}"
+                          Padding="13,6" Margin="8,0,0,0" Click="ConfigureFirewall_OnClick" />
+                  <Button Content="支持作者" Padding="16,6" Margin="8,0,0,0"
+                          Click="OpenDonation_OnClick" />
+                </WrapPanel>
               </StackPanel>
             </Border>
             <TextBox Margin="0,14,0,8" TextWrapping="Wrap" Foreground="#7D8494"

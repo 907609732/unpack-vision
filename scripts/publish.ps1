@@ -46,6 +46,11 @@ New-Item -ItemType Directory -Path $mediaOutput -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $mediaRoot 'mediamtx.exe') -Destination $mediaOutput
 Copy-Item -LiteralPath (Join-Path $mediaRoot 'LICENSE') -Destination (Join-Path $mediaOutput 'LICENSE-MediaMTX.txt')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination $appOutput
+$scriptOutput = Join-Path $appOutput 'Scripts'
+New-Item -ItemType Directory -Path $scriptOutput -Force | Out-Null
+Copy-Item `
+    -LiteralPath (Join-Path $projectRoot 'scripts\configure-private-firewall.ps1') `
+    -Destination $scriptOutput
 
 & $dotnet publish (Join-Path $projectRoot 'src\UnpackVision.Service\UnpackVision.Service.csproj') -c Release -r $Runtime --self-contained true -o (Join-Path $appOutput 'Service')
 exit $LASTEXITCODE

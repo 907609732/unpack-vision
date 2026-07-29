@@ -22,6 +22,7 @@ import zxingcpp.BarcodeReader
 class CameraPipelineController(
     context: Context,
     private val mainCameraOnly: Boolean = true,
+    certificateFingerprint: String? = null,
     private val onBarcode: (String) -> Unit,
     private val onStatus: (String) -> Unit,
     private val onBitrate: (Long) -> Unit,
@@ -38,7 +39,11 @@ class CameraPipelineController(
         this,
         cameraSource,
         NoAudioSource()
-    )
+    ).apply {
+        if (!certificateFingerprint.isNullOrBlank()) {
+            getStreamClient().addCertificates(PinnedCertificateTrustManager(certificateFingerprint))
+        }
+    }
     private val barcodeReader = BarcodeReader(
         BarcodeReader.Options(
             formats = setOf(

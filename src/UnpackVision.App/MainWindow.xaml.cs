@@ -49,7 +49,6 @@ public partial class MainWindow : Window
     private bool _loadingIssueNote;
     private bool _designerPageVisible;
     private bool _stationStatePollActive;
-    private bool _updatePromptShown;
     private Guid? _mirroredStationRecordId;
     private string _displayedTrackingNo = string.Empty;
     private string _lastCameraStatusText = string.Empty;
@@ -66,7 +65,9 @@ public partial class MainWindow : Window
         _stationStateTimer = new DispatcherTimer(TimeSpan.FromMilliseconds(750), DispatcherPriority.Background, OnStationStateTimer, Dispatcher);
         Loaded += OnLoaded;
         Closing += OnClosing;
+        App.Updates.StatusChanged += Updates_OnStatusChanged;
         App.Updates.UpdateReady += Updates_OnUpdateReady;
+        RenderUpdateBanner(App.Updates.Status);
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -242,28 +243,50 @@ public partial class MainWindow : Window
     }
 
     private void Updates_OnUpdateReady(object? sender, EventArgs e) =>
-        Dispatcher.BeginInvoke(async () =>
+        Dispatcher.BeginInvoke(() =>
         {
-            if (_updatePromptShown)
-            {
-                return;
-            }
+            RenderUpdateBanner(App.Updates.Status);
             if (_coordinator?.State is RecordingState.Recording or RecordingState.Starting or RecordingState.Saving)
             {
-                FooterText.Text = "新版本已下载，将在本单录像保存后提示安装";
-                return;
-            }
-            _updatePromptShown = true;
-            if (MessageBox.Show(
-                    this,
-                    $"{App.Updates.Status.Message}\n\n是否立即重启并安装？",
-                    "软件更新",
-                    MessageBoxButton.YesNo,
-                    MessageBoxImage.Information) == MessageBoxResult.Yes)
-            {
-                await TryApplyUpdateAsync();
+                FooterText.Text = "新版本已下载，将在本单录像保存后保持提醒";
             }
         });
+
+    private void Updates_OnStatusChanged(object? sender, DesktopUpdateStatus status) =>
+        Dispatcher.BeginInvoke(() => RenderUpdateBanner(status));
+
+    private void RenderUpdateBanner(DesktopUpdateStatus status)
+    {
+        if (!status.ReadyToInstall && string.IsNullOrWhiteSpace(status.AvailableVersion))
+        {
+            UpdateBanner.Visibility = Visibility.Collapsed;
+            return;
+        }
+        UpdateBanner.Visibility = Visibility.Visible;
+        UpdateBannerTitle.Text = status.IsCritical
+            ? $"安全更新 {status.AvailableVersion}"
+            : $"发现版本 {status.AvailableVersion}";
+        UpdateBannerMessage.Text = status.Message;
+        UpdateBanner.Background = status.IsCritical
+            ? new SolidColorBrush(Color.FromRgb(255, 244, 232))
+            : new SolidColorBrush(Color.FromRgb(234, 245, 255));
+        UpdateInstallButton.IsEnabled = status.ReadyToInstall;
+        UpdateInstallButton.Content = status.ReadyToInstall ? "重启并安装" : "正在下载";
+    }
+
+    private async void UpdateInstallButton_OnClick(object sender, RoutedEventArgs e) =>
+        await TryApplyUpdateAsync();
+
+    private void UpdateNotesButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        var url = App.Updates.Status.ReleaseNotesUrl ?? ProductInfo.LatestReleaseUrl;
+        Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+    }
+
+    private void UpdateDismissButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        UpdateBanner.Visibility = Visibility.Collapsed;
+    }
 
     internal async Task TryApplyUpdateAsync()
     {
@@ -1320,6 +1343,7 @@ public partial class MainWindow : Window
         }
 
         _shutdownStarted = true;
+        App.Updates.StatusChanged -= Updates_OnStatusChanged;
         App.Updates.UpdateReady -= Updates_OnUpdateReady;
         _stationStateTimer.Stop();
         if (_desktopCommandListener is not null)

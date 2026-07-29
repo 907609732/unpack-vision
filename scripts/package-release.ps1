@@ -1,8 +1,9 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '2.1.0',
+    [string]$Version = '2.2.0',
     [string]$AndroidApk,
-    [switch]$SkipPublish
+    [switch]$SkipPublish,
+    [switch]$RebuildExisting
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,6 +37,25 @@ foreach ($required in @($iconPath, $releaseNotes)) {
 }
 
 New-Item -ItemType Directory -Force -Path $velopackDirectory, $releaseDirectory, $toolDirectory | Out-Null
+if ($RebuildExisting) {
+    $velopackRoot = [IO.Path]::GetFullPath($velopackDirectory)
+    $rebuildNames = @(
+        "EcommerceUnpackRecorder-$Version-full.nupkg",
+        "EcommerceUnpackRecorder-$Version-delta.nupkg",
+        'EcommerceUnpackRecorder-win-Setup.exe',
+        'EcommerceUnpackRecorder-win-Portable.zip',
+        'releases.win.json',
+        'assets.win.json',
+        'RELEASES'
+    )
+    foreach ($name in $rebuildNames) {
+        $target = [IO.Path]::GetFullPath((Join-Path $velopackRoot $name))
+        if (-not $target.StartsWith($velopackRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to remove a Velopack file outside $velopackRoot"
+        }
+        Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+    }
+}
 $vpk = Join-Path $toolDirectory 'vpk.exe'
 if (-not (Test-Path -LiteralPath $vpk)) {
     & dotnet tool install vpk --version 1.2.0 --tool-path $toolDirectory
@@ -46,22 +66,29 @@ else {
     if ($LASTEXITCODE -ne 0) { throw 'Could not update the pinned Velopack CLI.' }
 }
 
-& $vpk pack `
-    --packId EcommerceUnpackRecorder `
-    --packVersion $Version `
-    --packDir $publishDirectory `
-    --mainExe $mainExecutable.Name `
-    --packTitle $productName `
-    --packAuthors 'Wucheng' `
-    --releaseNotes $releaseNotes `
-    --icon $iconPath `
-    --runtime win-x64 `
-    --channel win `
-    --delta BestSpeed `
-    --shortcuts Desktop,StartMenuRoot `
-    --instLocation PerUser `
-    --outputDir $velopackDirectory
-if ($LASTEXITCODE -ne 0) { throw "Velopack packaging failed with exit code $LASTEXITCODE" }
+$existingFullPackage = Join-Path $velopackDirectory "EcommerceUnpackRecorder-$Version-full.nupkg"
+$existingSetup = Join-Path $velopackDirectory 'EcommerceUnpackRecorder-win-Setup.exe'
+if ((Test-Path -LiteralPath $existingFullPackage) -and (Test-Path -LiteralPath $existingSetup)) {
+    Write-Host "Reusing existing Velopack $Version package."
+}
+else {
+    & $vpk pack `
+        --packId EcommerceUnpackRecorder `
+        --packVersion $Version `
+        --packDir $publishDirectory `
+        --mainExe $mainExecutable.Name `
+        --packTitle $productName `
+        --packAuthors 'Wucheng' `
+        --releaseNotes $releaseNotes `
+        --icon $iconPath `
+        --runtime win-x64 `
+        --channel win `
+        --delta BestSpeed `
+        --shortcuts Desktop,StartMenuRoot `
+        --instLocation PerUser `
+        --outputDir $velopackDirectory
+    if ($LASTEXITCODE -ne 0) { throw "Velopack packaging failed with exit code $LASTEXITCODE" }
+}
 
 Get-ChildItem -LiteralPath $releaseDirectory -File -ErrorAction SilentlyContinue |
     Remove-Item -Force
@@ -92,18 +119,33 @@ if (-not [string]::IsNullOrWhiteSpace($AndroidApk)) {
     $apkHash = (Get-FileHash -LiteralPath $apkDestination -Algorithm SHA256).Hash.ToLowerInvariant()
     $mobileManifest = @{
         versionName = $Version
-        versionCode = 20100
+        versionCode = 20200
         apkUrl = 'https://github.com/907609732/unpack-vision/releases/latest/download/EcommerceUnpackRecorder-Android.apk'
         sha256 = $apkHash
         minSdk = 26
         publishedAt = [DateTimeOffset]::UtcNow.ToString('o')
         notesUrl = "https://github.com/907609732/unpack-vision/releases/tag/v$Version"
+        releaseNotesUrl = "https://github.com/907609732/unpack-vision/releases/tag/v$Version"
+        minimumSupportedVersion = '2.1.0'
+        critical = $false
     } | ConvertTo-Json
     [IO.File]::WriteAllText(
         (Join-Path $releaseDirectory 'mobile-update.json'),
         $mobileManifest,
         [Text.UTF8Encoding]::new($false))
 }
+
+$desktopManifest = @{
+    version = $Version
+    minimumSupportedVersion = '2.1.0'
+    critical = $false
+    releaseNotesUrl = "https://github.com/907609732/unpack-vision/releases/tag/v$Version"
+    publishedAt = [DateTimeOffset]::UtcNow.ToString('o')
+} | ConvertTo-Json
+[IO.File]::WriteAllText(
+    (Join-Path $releaseDirectory 'desktop-update.json'),
+    $desktopManifest,
+    [Text.UTF8Encoding]::new($false))
 
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'THIRD_PARTY_NOTICES.md') -Destination $releaseDirectory -Force
 

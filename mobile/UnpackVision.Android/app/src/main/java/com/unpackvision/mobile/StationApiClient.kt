@@ -23,6 +23,9 @@ class StationApiClient {
         }
         val stationAddress = payload.getString("stationAddress").trimEnd('/')
         val stationId = payload.getString("stationId")
+        val certificateFingerprint = PinnedCertificateTrustManager.normalizeFingerprint(
+            payload.getString("certificateFingerprint")
+        )
         val endpoint = URL("$stationAddress/device/v1/pair")
         val body = JSONObject()
             .put("sessionId", payload.getString("id"))
@@ -32,19 +35,23 @@ class StationApiClient {
             .put("roles", org.json.JSONArray(listOf("scanner", "camera", "remote")))
             .put("scopes", org.json.JSONArray(listOf("scan:send", "camera:publish", "records:read", "video:read")))
             .toString()
-        val response = request(endpoint, "POST", body)
+        val response = request(endpoint, "POST", body, certificateFingerprint)
         val json = JSONObject(response)
         StoredDeviceCredential(
             deviceId = json.getJSONObject("device").getString("id"),
             accessToken = json.getString("accessToken"),
             stationId = stationId,
-            stationAddress = stationAddress
+            stationAddress = stationAddress,
+            certificateFingerprint = certificateFingerprint
         )
     }
 
-    suspend fun fetchStationId(baseAddress: String): String = withContext(Dispatchers.IO) {
+    suspend fun fetchStationId(
+        baseAddress: String,
+        certificateFingerprint: String
+    ): String = withContext(Dispatchers.IO) {
         val endpoint = URL("${baseAddress.trimEnd('/')}/api/v1/health")
-        val connection = (endpoint.openConnection() as HttpURLConnection).apply {
+        val connection = openPinnedConnection(endpoint, certificateFingerprint).apply {
             requestMethod = "GET"
             connectTimeout = 4_000
             readTimeout = 6_000
@@ -62,10 +69,17 @@ class StationApiClient {
     suspend fun createPublishSession(
         baseAddress: String,
         deviceId: String,
-        accessToken: String
+        accessToken: String,
+        certificateFingerprint: String
     ): MediaPublishEndpoint = withContext(Dispatchers.IO) {
         val endpoint = URL("${baseAddress.trimEnd('/')}/api/v1/media/publish-session")
-        val response = authenticatedRequest(endpoint, "POST", deviceId, accessToken)
+        val response = authenticatedRequest(
+            endpoint,
+            "POST",
+            deviceId,
+            accessToken,
+            certificateFingerprint
+        )
         val json = JSONObject(response)
         MediaPublishEndpoint(
             rtspUrl = json.getString("rtspUrl"),
@@ -77,7 +91,8 @@ class StationApiClient {
         baseAddress: String,
         stationId: String,
         deviceId: String,
-        accessToken: String
+        accessToken: String,
+        certificateFingerprint: String
     ): StationState = withContext(Dispatchers.IO) {
         require(stationId.isNotBlank()) { "请先连接电脑获取工位 ID" }
         val encodedStationId = URLEncoder.encode(stationId, Charsets.UTF_8.name())
@@ -87,6 +102,7 @@ class StationApiClient {
             "GET",
             deviceId,
             accessToken,
+            certificateFingerprint,
             connectTimeoutMilliseconds = 3_000,
             readTimeoutMilliseconds = 4_000
         ))
@@ -106,6 +122,7 @@ class StationApiClient {
         accessToken: String?,
         value: String,
         mode: WorkMode,
+        certificateFingerprint: String,
         eventId: String = UUID.randomUUID().toString(),
         detectedAt: String = java.time.OffsetDateTime.now().toString()
     ): String = withContext(Dispatchers.IO) {
@@ -123,7 +140,7 @@ class StationApiClient {
             .put("detectedAt", detectedAt)
             .put("idempotencyKey", eventId)
             .toString()
-        val connection = (endpoint.openConnection() as HttpURLConnection).apply {
+        val connection = openPinnedConnection(endpoint, certificateFingerprint).apply {
             requestMethod = "POST"
             connectTimeout = 4_000
             readTimeout = 8_000
@@ -145,8 +162,13 @@ class StationApiClient {
         JSONObject(responseText).optString("message", "电脑已确认")
     }
 
-    private fun request(endpoint: URL, method: String, body: String? = null): String {
-        val connection = (endpoint.openConnection() as HttpURLConnection).apply {
+    private fun request(
+        endpoint: URL,
+        method: String,
+        body: String? = null,
+        certificateFingerprint: String
+    ): String {
+        val connection = openPinnedConnection(endpoint, certificateFingerprint).apply {
             requestMethod = method
             connectTimeout = 5_000
             readTimeout = 8_000
@@ -176,10 +198,11 @@ class StationApiClient {
         method: String,
         deviceId: String,
         accessToken: String,
+        certificateFingerprint: String,
         connectTimeoutMilliseconds: Int = 8_000,
         readTimeoutMilliseconds: Int = 12_000
     ): String {
-        val connection = (endpoint.openConnection() as HttpURLConnection).apply {
+        val connection = openPinnedConnection(endpoint, certificateFingerprint).apply {
             requestMethod = method
             connectTimeout = connectTimeoutMilliseconds
             readTimeout = readTimeoutMilliseconds

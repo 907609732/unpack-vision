@@ -16,7 +16,8 @@ data class StoredDeviceCredential(
     val deviceId: String,
     val accessToken: String,
     val stationId: String,
-    val stationAddress: String
+    val stationAddress: String,
+    val certificateFingerprint: String
 )
 
 class DeviceCredentialStore(context: Context) {
@@ -52,6 +53,7 @@ class DeviceCredentialStore(context: Context) {
             .putString(KEY_TOKEN_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
             .putString(KEY_STATION_ID, credential.stationId)
             .putString(KEY_STATION_ADDRESS, credential.stationAddress)
+            .putString(KEY_CERTIFICATE_FINGERPRINT, credential.certificateFingerprint)
             .apply()
     }
 
@@ -61,13 +63,16 @@ class DeviceCredentialStore(context: Context) {
         val iv = Base64.decode(preferences.getString(KEY_TOKEN_IV, null), Base64.NO_WRAP)
         val stationId = preferences.getString(KEY_STATION_ID, null) ?: return null
         val stationAddress = preferences.getString(KEY_STATION_ADDRESS, null) ?: return null
+        val certificateFingerprint =
+            preferences.getString(KEY_CERTIFICATE_FINGERPRINT, null) ?: return null
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.DECRYPT_MODE, getOrCreateEncryptionKey(), GCMParameterSpec(128, iv))
         StoredDeviceCredential(
             deviceId,
             cipher.doFinal(encryptedToken).toString(Charsets.UTF_8),
             stationId,
-            stationAddress
+            stationAddress,
+            certificateFingerprint
         )
     }.getOrNull()
 
@@ -104,5 +109,6 @@ class DeviceCredentialStore(context: Context) {
         const val KEY_TOKEN_IV = "access-token-iv"
         const val KEY_STATION_ID = "station-id"
         const val KEY_STATION_ADDRESS = "station-address"
+        const val KEY_CERTIFICATE_FINGERPRINT = "certificate-fingerprint"
     }
 }
