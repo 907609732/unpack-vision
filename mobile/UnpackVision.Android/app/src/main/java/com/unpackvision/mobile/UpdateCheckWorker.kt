@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -52,11 +53,17 @@ class UpdateCheckWorker(
                 description = "电商拆包智能录像新版本和安全更新提醒"
             }
         )
+        val updateIntent = Intent().apply {
+            component = ComponentName(applicationContext, MainActivity::class.java)
+            setPackage(applicationContext.packageName)
+            action = "${applicationContext.packageName}.action.OPEN_UPDATE"
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
         val pendingIntent = PendingIntent.getActivity(
             applicationContext,
-            0,
-            Intent(applicationContext, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            UPDATE_NOTIFICATION_ID,
+            updateIntent,
+            PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val title = if (manifest.critical) "发现安全更新" else "发现新版本"
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
