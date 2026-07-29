@@ -275,7 +275,15 @@ public sealed class MediaRelayManager : IMediaRelayManager
     {
         if (!string.IsNullOrWhiteSpace(message))
         {
-            Trace.WriteLine($"[MediaMTX] {message}");
+            var safeMessage = message
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+                .Replace('\t', ' ');
+            if (safeMessage.Length > 512)
+            {
+                safeMessage = safeMessage[..512];
+            }
+            Trace.WriteLine($"[MediaMTX] {safeMessage}");
         }
     }
 
