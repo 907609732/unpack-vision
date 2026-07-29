@@ -8,6 +8,6 @@
     <ProjectReference Include="../UnpackVision.Core/UnpackVision.Core.csproj" />
     <ProjectReference Include="../UnpackVision.Infrastructure/UnpackVision.Infrastructure.csproj" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.10" />
-    <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
+    <PackageReference Include="Microsoft.OpenApi" Version="3.9.0" />
   </ItemGroup>
 </Project>
