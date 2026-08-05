@@ -97,4 +97,5 @@ public sealed class MediaRelayOptions
     public int RtspPort { get; set; } = 8554;
     public int RtspsPort { get; set; } = 8555;
     public int WebRtcPort { get; set; } = 8889;
+    public int WebRtcUdpPort { get; set; } = 8189;
 }

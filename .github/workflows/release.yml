@@ -62,6 +62,22 @@ jobs:
           "ANDROID_KEY_ALIAS=$env:KEY_ALIAS" | Out-File -FilePath $env:GITHUB_ENV -Append
           "ANDROID_KEY_PASSWORD=$env:KEY_PASSWORD" | Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Configure public telemetry endpoint
+        shell: pwsh
+        run: |
+          $endpointPath = ".\src\UnpackVision.App\Assets\telemetry-endpoint.txt"
+          if (-not (Test-Path -LiteralPath $endpointPath)) {
+            throw "The public telemetry endpoint file is missing."
+          }
+          $endpoint = (Get-Content -LiteralPath $endpointPath -Raw -Encoding UTF8).Trim()
+          $uri = $null
+          if (-not [Uri]::TryCreate($endpoint, [UriKind]::Absolute, [ref]$uri) -or
+              $uri.Scheme -ne [Uri]::UriSchemeHttps) {
+            throw "The telemetry endpoint must be an absolute HTTPS URL."
+          }
+          "UNPACKVISION_TELEMETRY_ENDPOINT=$endpoint" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
       - name: Test and build signed Android APK
         shell: pwsh
         run: |
@@ -88,12 +104,55 @@ jobs:
           }
 
       - name: Build Windows installer and release files
+        id: release_version
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart("v")
+          "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           .\scripts\package-release.ps1 `
             -Version $version `
             -AndroidApk .\mobile\UnpackVision.Android\app\build\outputs\apk\release\app-release.apk
+
+      - name: Enforce Windows stable signing gate
+        id: release_channel
+        shell: pwsh
+        env:
+          WINDOWS_STABLE_SIGNING_READY: ${{ vars.WINDOWS_STABLE_SIGNING_READY }}
+        run: |
+          $stableRequested =
+            $env:WINDOWS_STABLE_SIGNING_READY -eq "true"
+          $version = "${{ steps.release_version.outputs.value }}"
+          $staging = ".\artifacts\publish\staging\$version\App"
+          $ownedExecutables = @(
+            (Join-Path $staging "拆包智录.exe"),
+            (Join-Path $staging "StationHost\拆包智录工位主机.exe"),
+            (Join-Path $staging "Service\拆包智录兼容同步服务.exe"),
+            ".\artifacts\release-output\EcommerceUnpackRecorder-win-Setup.exe",
+            ".\artifacts\release-output\拆包智录-Setup.exe"
+          )
+          $invalid = @()
+          foreach ($path in $ownedExecutables) {
+            if (-not (Test-Path -LiteralPath $path)) {
+              $invalid += "$path (missing)"
+              continue
+            }
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+              $invalid += "$path ($($signature.Status))"
+            }
+          }
+          if ($stableRequested -and $invalid.Count -gt 0) {
+            throw "Stable release refused because trusted Windows signatures are missing: $($invalid -join '; ')"
+          }
+          $prerelease = -not $stableRequested
+          "prerelease=$($prerelease.ToString().ToLowerInvariant())" |
+            Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          if ($prerelease) {
+            Write-Host "Windows trusted signing is not enabled; publishing as Prerelease."
+          }
+          else {
+            Write-Host "All owned Windows binaries are trusted; Stable release is permitted."
+          }
 
       - name: Attest build provenance
         uses: actions/attest@36051bcae73b7c2a8a6945a48cbf80953c6baa35 # v4
@@ -103,7 +162,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          body_path: docs/releases/2.2.0.md
+          body_path: docs/releases/${{ steps.release_version.outputs.value }}.md
           files: artifacts/release-output/*
           fail_on_unmatched_files: true
-          prerelease: true
+          prerelease: ${{ steps.release_channel.outputs.prerelease }}

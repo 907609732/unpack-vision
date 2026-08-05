@@ -30,13 +30,15 @@ public sealed class PrivacyAndTelemetryTests
     }
 
     [Fact]
-    public void DonationProfile_DefaultsToUnconfiguredQrCodes()
+    public void DonationProfile_DefaultsToProvidedQrCodes()
     {
         var profile = new DonationProfile();
 
-        Assert.False(profile.IsConfigured);
+        Assert.True(profile.IsConfigured);
         Assert.Equal("五成", profile.DeveloperName);
-        Assert.True(string.IsNullOrWhiteSpace(profile.AlipayQrAsset));
-        Assert.True(string.IsNullOrWhiteSpace(profile.WeChatQrAsset));
+        Assert.Equal(@"Assets\Donation\alipay.jpg", profile.AlipayQrAsset);
+        Assert.Equal(@"Assets\Donation\wechat.jpg", profile.WeChatQrAsset);
+        Assert.Equal(64, profile.AlipayQrSha256.Length);
+        Assert.Equal(64, profile.WeChatQrSha256.Length);
     }
 }

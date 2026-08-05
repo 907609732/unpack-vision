@@ -1,4 +1,6 @@
-namespace UnpackVision.Core;
+using UnpackVision.Core;
+
+namespace UnpackVision.Application.Recording;
 
 public enum ScanAction
 {

@@ -1,7 +1,7 @@
-# 电商拆包智能录像
+# 拆包智录
 
 <p align="center">
-  <img src="docs/assets/logo.png" width="180" alt="电商拆包智能录像 Logo">
+  <img src="docs/assets/logo.png" width="180" alt="拆包智录 Logo">
 </p>
 
 这是一个面向中小商家的零成本、开源 Windows 拆包/打包录像、手机协同与数据同步系统。它不会修改 HIK SCAN，也不包含海康的源代码、商标或专有资源。
@@ -19,7 +19,7 @@ Windows 端使用 Velopack 每用户安装器，后续更新由软件后台下�
 
 - HIK SCAN 兼容同步服务：监控拆包、打包录像目录，等 MP4 写入稳定后解析单号和起止时间，写入 SQLite，并通过可靠重试队列同步 Excel。
 - 首次运行安全基线：第一次只登记已有历史录像，不自动补写 Excel；以后产生的新录像才自动进入同步队列。
-- Excel 安全写入：按 B 列最后一个真实非空单元格追加，A 列写真实 Excel 日期并继承日期显示格式，B 列强制文本，C 列写平台关联公式，E 列写入 `【电商拆包智能录像】` 来源标记并安全合并异常/备注，D、F 保持空白；写入前备份，以临时文件和原子替换保存。同步时会安全修复日期列中缺少日期样式的序列值，兼容 Excel 和 WPS。
+- Excel 安全写入：按 B 列最后一个真实非空单元格追加，A 列写真实 Excel 日期并继承日期显示格式，B 列强制文本，C 列写平台关联公式，E 列写入 `【拆包智录】` 来源标记并安全合并异常/备注，D、F 保持空白；写入前备份，以临时文件和原子替换保存。同步时会安全修复日期列中缺少日期样式的序列值，兼容 Excel 和 WPS。
 - 独立录像桌面端：按实际拆包流程独立设计，包含持续实时预览、扫码开始、再次扫描当前单号结束、扫描新单号自动保存并开始下一单、手动停止、重复单号标识、超时提醒、语音提示和右侧最近结果。
 - 异常标签与备注：录像中可扫描固定“破损”“调包”指令条码或点击快捷按钮，一个包裹可有多个标签并可撤销；备注 500ms 自动保存。异常会进入实时水印、录像文件名、SQLite、历史检索与 Excel E 列，人工 Excel 备注不会被覆盖。
 - 热敏条码设计器：录像不中断即可切换页面；支持文本、图片/Logo、Code 128、二维码、直线、矩形、拖动缩放、旋转、图层、对齐、复制粘贴、撤销重做、毫米尺寸、打印偏移、Excel/CSV 字段映射、批量份数、版本化 JSON 模板和 Windows 打印机驱动。
@@ -32,10 +32,12 @@ Windows 端使用 Velopack 每用户安装器，后续更新由软件后台下�
 - 本地 API：只监听 `127.0.0.1`，使用 DPAPI 保存 API 密钥，提供记录查询、导入、重试、健康检查、图像处理和条码识别接口。
 - 离线图像能力：文档自动找边、透视矫正、旋转、彩色/灰度/黑白增强，以及本地一维码、二维码识别。
 - 默认不调用云端 OCR。OCR 接口已保留，但未部署本地模型时会明确返回“未配置”，不会上传面单或证件。
+- 首次配置向导：隐私协议后依次选择录像目录、绑定或生成标准 Excel、预览旧数据并测试写入；Excel 可暂时跳过，不影响录像。
+- 便携业务索引：录像目录中的 `.unpackvision` 只保存记录元数据和相对路径。重装或换电脑后重新选择原录像目录和 Excel，即可预览并合并恢复，不移动或覆盖录像。
 
-## 2.2 隐私、安全与安卓协同
+## 隐私、安全、迁移与安卓协同
 
-2.2.0 已完成可运行的局域网协同主链路与首轮公开发布安全加固：
+当前 2.3.2 已包含可运行的局域网协同主链路与公开发布安全加固：
 
 - 新增常驻用户会话的 `UnpackVision.StationHost`，统一接收电脑、手机和未来网站的扫码命令。
 - 新增幂等 `IScanCommandRouter`；命令回执按幂等键保存在 SQLite，工位主机重启后重复事件仍返回原结果。手机扫码器可选择是否触发录像，关闭时可靠追加 Excel。
@@ -53,9 +55,9 @@ Windows 端使用 Velopack 每用户安装器，后续更新由软件后台下�
 - 电脑端在当前 Windows 用户登录后自动启动；手机会分别检测“工位服务在线”和“桌面录像程序已就绪”，不会再把只能连接但无法录像的状态显示为成功。
 - MediaMTX 由校验 SHA256 的脚本下载，不把第三方二进制提交到源码仓库；发布包会携带已校验二进制和上游许可证。
 
-2.2.0 提供固定 Release 签名 APK、GitHub Release 更新清单和 SHA256 校验。手机控制接口使用工位自签名证书的 HTTPS 并在安卓端固定 SHA256 指纹；媒体发布使用 RTSPS。旧明文配对凭据会在安全迁移时失效，需要重新扫码配对一次。USB 调试兜底只允许 `127.0.0.1` 回环明文，不允许局域网明文连接。
+2.3.2 提供固定 Release 签名 APK、GitHub Release 更新清单和 SHA256 校验。手机控制接口使用工位自签名证书的 HTTPS 并在安卓端固定 SHA256 指纹；媒体发布使用 RTSPS。旧明文配对凭据会在安全迁移时失效，需要重新扫码配对一次。USB 调试兜底只允许 `127.0.0.1` 回环明文，不允许局域网明文连接。
 
-首次启动会在相机、扫码和联网更新之前展示《用户协议》和《隐私政策》。2.2.0 的匿名统计接口为空实现，不生成稳定安装 ID；开发者只参考 GitHub Release 资源下载次数。设置页可查看协议、隐私政策、安全报告与“支持作者”，未配置真实赞赏码时不会显示测试二维码。
+首次启动会在相机、扫码和联网更新之前展示《用户协议》和《隐私政策》。2.3.2 可在用户单独同意后，每个北京时间自然日向固定 Cloudflare HTTPS 端点发送一次最小匿名日活事件；不读取硬件指纹、单号、录像、Excel、路径或账号。关闭统计会停止请求并删除本机随机统计密钥，不影响任何功能。设置页可查看协议、隐私政策、安全报告与“支持作者”。
 
 工位主机首批开放接口：
 
@@ -93,11 +95,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run-app.ps1
 
 首次使用桌面端：
 
-1. 退出 HIK SCAN，确认摄像头未被其他程序占用。
-2. 打开桌面端，选择“拆包”或“打包”。
-3. 扫描普通快递单号开始录像，界面会显示当前单号条码。
-4. 拆包完成后再次扫描当前单号结束并保存；也可以直接扫描下一个快递单号，软件会保存当前录像并自动开始下一单。
-5. 扫码枪异常时使用“手动结束录像”。
+1. 同意协议后，通过五步向导选择录像目录。
+2. 选择现有 Excel、生成六列标准表格，或暂时跳过。
+3. 查看旧录像和便携索引恢复预览，确认后完成测试写入。
+4. 退出 HIK SCAN，确认摄像头未被其他程序占用。
+5. 扫描普通快递单号开始录像；再次扫描当前单号结束，也可扫描新单号自动换单。
+6. 扫码枪异常时使用“手动结束录像”。
+
+设备迁移时，保留或复制整个录像目录和 Excel，在新电脑安装后选择这两个原位置，查看恢复预览并确认合并，最后重新配置摄像头和手机配对。手机密钥不会随业务索引迁移。
 
 ## 兼容同步服务配置
 
@@ -143,7 +148,9 @@ X-UnpackVision-Key: <本机 API 密钥>
 - SQLite：`%LOCALAPPDATA%\UnpackVision\unpackvision.db`
 - 桌面端设置：`%LOCALAPPDATA%\UnpackVision\settings.json`
 - 热敏标签模板：`%LOCALAPPDATA%\UnpackVision\Templates`
+- 诊断日志：`%LOCALAPPDATA%\UnpackVision\Logs`（按天和 20 MB 大小滚动，最长保留 14 天；可在“设置 → 关于”打开）
 - 独立录像：`%USERPROFILE%\Videos\UnpackVision\Unpacking` 或 `Packing`
+- 便携业务索引：`录像目录\.unpackvision`（应与录像一起备份）
 - API 密钥：`%LOCALAPPDATA%\UnpackVision\api-key.protected`
 
 `settings.json` 保存扫码规则、异常条码、最大录像分钟数和工作模式。单号在 SQLite 中始终按文本保存，保留字母、横线和前导零。
@@ -177,14 +184,16 @@ powershell -ExecutionPolicy Bypass -File .\scripts\fetch-mediamtx.ps1
 
 发布结果保存在 `artifacts\release-output`。Windows 安装器把桌面端、`StationHost`、兼容同步服务和带许可证的 MediaMTX 作为同一版本整体更新；安卓端生成固定文件名 APK、更新清单和 SHA256。
 
-生成完整 2.2.0 发布文件：
+生成完整 2.3.2 发布文件：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-signed-android.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1 `
-  -Version 2.2.0 `
+  -Version 2.3.2 `
   -AndroidApk .\mobile\UnpackVision.Android\app\build\outputs\apk\release\app-release.apk
 ```
+
+匿名日活服务的开源 Worker 位于 `telemetry`，部署前需复制 `wrangler.example.toml`、创建 D1 并在开发者自己的 Cloudflare 账号中授权。未填写正式 HTTPS 端点时客户端不会发送统计请求。
 
 ## 许可证与独立实现声明
 
@@ -195,7 +204,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1 `
 - [用户协议](docs/TERMS.md)
 - [隐私政策](docs/PRIVACY.md)
 - [安全报告与漏洞披露](SECURITY.md)
-- [2.2.0 安全审计记录](docs/SECURITY-AUDIT-2.2.0.md)
+- [2.3.0 上线前安全与发布验证记录](docs/SECURITY-AUDIT-2.3.0.md)
+- [2.3.0 发布说明](docs/releases/2.3.0.md)
+- [2.3.2 发布说明](docs/releases/2.3.2.md)
+
+## Code signing policy
+
+Windows 稳定版必须由可验证的 GitHub Actions 构建产生，并使用受信任的 Authenticode 证书签名。未签名构建只能作为 Prerelease。项目正在申请 SignPath Foundation 免费开源代码签名；具体职责、隐私边界和发布门禁见 [代码签名政策](docs/CODE_SIGNING.md)。
 
 ## 后续扩展点
 

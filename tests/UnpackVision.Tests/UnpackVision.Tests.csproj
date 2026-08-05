@@ -5,15 +5,52 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../src/UnpackVision.Application/UnpackVision.Application.csproj" />
     <ProjectReference Include="../../src/UnpackVision.Core/UnpackVision.Core.csproj" />
     <ProjectReference Include="../../src/UnpackVision.Infrastructure/UnpackVision.Infrastructure.csproj" />
     <ProjectReference Include="../../src/UnpackVision.App/UnpackVision.App.csproj" />
     <ProjectReference Include="../../src/UnpackVision.StationHost/UnpackVision.StationHost.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageReference Include="TngTech.ArchUnitNET.xUnit" Version="0.13.3" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../src/UnpackVision.App/MainWindow.xaml"
+          Link="TestData/MainWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/App.xaml"
+          Link="TestData/App.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/SettingsWindow.xaml"
+          Link="TestData/SettingsWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/Styles/SettingsWindowStyles.xaml"
+          Link="TestData/SettingsWindowStyles.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/FirstRunConsentWindow.xaml"
+          Link="TestData/FirstRunConsentWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/SetupWizardWindow.xaml"
+          Link="TestData/SetupWizardWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/UnpackVision.App.csproj"
+          Link="TestData/UnpackVision.App.csproj"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/HistoryWindow.xaml"
+          Link="TestData/HistoryWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/PairedDevicesWindow.xaml"
+          Link="TestData/PairedDevicesWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../.github/workflows/release.yml"
+          Link="TestData/release.yml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/Assets/telemetry-endpoint.txt"
+          Link="TestData/telemetry-endpoint.txt"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

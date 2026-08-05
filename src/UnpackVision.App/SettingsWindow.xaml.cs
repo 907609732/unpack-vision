@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using UnpackVision.Infrastructure;
+using UnpackVision.Infrastructure.Diagnostics;
 using UnpackVision.Core;
 
 namespace UnpackVision.App;
@@ -23,6 +24,9 @@ public partial class SettingsWindow : Window
         _source = settings;
         RecordingRootInput.Text = settings.RecordingRoot;
         ExcelPathInput.Text = settings.ExcelWorkbookPath;
+        WorkspaceStatusText.Text = settings.Setup.IsComplete
+            ? $"工作区 {settings.Setup.WorkspaceId:D} · 便携索引已启用"
+            : "尚未完成工作区配置";
         MaximumMinutesInput.Text = settings.MaximumRecordingMinutes.ToString();
         LivePreviewCheck.IsChecked = settings.ShowLivePreview;
         VoiceCheck.IsChecked = settings.VoiceEnabled;
@@ -67,6 +71,7 @@ public partial class SettingsWindow : Window
         DebounceInput.Text = settings.Scanner.DebounceMilliseconds.ToString();
         CaptureIssueSnapshotCheck.IsChecked = settings.CaptureSnapshotOnIssueTag;
         AutoUpdateCheck.IsChecked = settings.AutoCheckUpdates;
+        TelemetryCheck.IsChecked = settings.Telemetry.Enabled;
         AboutVersionText.Text = $"版本 {ProductInfo.Version}";
         RepositoryUrlText.Text = ProductInfo.RepositoryUrl;
         AndroidDownloadUrlText.Text = ProductInfo.AndroidDownloadUrl;
@@ -90,12 +95,44 @@ public partial class SettingsWindow : Window
 
     private void OpenDevicePairing_OnClick(object sender, RoutedEventArgs e)
     {
+        using var operation = App.UiWatchdog?.BeginOperation("settings.open-pairing");
+        DiagnosticLog.Information("用户打开手机配对窗口");
         new DevicePairingWindow { Owner = this }.ShowDialog();
+        DiagnosticLog.Information("手机配对窗口已关闭");
     }
 
     private void OpenPairedDevices_OnClick(object sender, RoutedEventArgs e)
     {
+        using var operation = App.UiWatchdog?.BeginOperation("settings.open-paired-devices");
+        DiagnosticLog.Information("用户打开已配对设备窗口");
         new PairedDevicesWindow { Owner = this }.ShowDialog();
+        DiagnosticLog.Information("已配对设备窗口已关闭");
+    }
+
+    private void OpenLogDirectory_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Directory.CreateDirectory(DiagnosticLog.LogRootDirectory);
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                UseShellExecute = true
+            };
+            startInfo.ArgumentList.Add(DiagnosticLog.LogRootDirectory);
+            Process.Start(startInfo);
+            DiagnosticLog.Information("用户打开诊断日志目录");
+        }
+        catch (Exception exception)
+        {
+            DiagnosticLog.Error(exception, "打开诊断日志目录失败");
+            MessageBox.Show(
+                this,
+                $"无法打开日志目录：{exception.Message}",
+                "诊断日志",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
     }
 
     private void BrowseRecordingRoot_OnClick(object sender, RoutedEventArgs e)
@@ -113,6 +150,33 @@ public partial class SettingsWindow : Window
         if (dialog.ShowDialog(this) == true)
         {
             ExcelPathInput.Text = dialog.FileName;
+        }
+    }
+
+    private async void CreateExcel_OnClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "生成标准退货扫码表格",
+            Filter = "Excel 工作簿 (*.xlsx)|*.xlsx",
+            FileName = $"退货扫码记录_{DateTime.Now:yyyy年MM月}.xlsx",
+            AddExtension = true,
+            OverwritePrompt = true
+        };
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+        try
+        {
+            var service = new WorkbookTemplateService();
+            await service.CreateAsync(dialog.FileName);
+            ExcelPathInput.Text = dialog.FileName;
+            MessageBox.Show(this, "标准六列表格已生成并绑定。", "表格已创建");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "生成失败", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -138,6 +202,16 @@ public partial class SettingsWindow : Window
                 CaptureSnapshotOnIssueTag = CaptureIssueSnapshotCheck.IsChecked == true,
                 AutoCheckUpdates = AutoUpdateCheck.IsChecked == true,
                 Consent = _source.Consent,
+                Setup = _source.Setup,
+                Telemetry = new TelemetryConsentState
+                {
+                    Enabled = TelemetryCheck.IsChecked == true,
+                    ChangedAt = _source.Telemetry.Enabled == (TelemetryCheck.IsChecked == true)
+                        ? _source.Telemetry.ChangedAt
+                        : DateTimeOffset.Now,
+                    WithdrawnAt = TelemetryCheck.IsChecked == true ? null :
+                        _source.Telemetry.WithdrawnAt ?? DateTimeOffset.Now
+                },
                 Donation = _source.Donation,
                 IssueTags = ValidateIssueTags(),
                 Scanner = _source.Scanner with
@@ -218,6 +292,85 @@ public partial class SettingsWindow : Window
 
     private void OpenDonation_OnClick(object sender, RoutedEventArgs e) =>
         new DonationWindow(_source.Donation) { Owner = this }.ShowDialog();
+
+    private async void CheckRecovery_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var preview = await CreateRecoveryService().PreviewAsync(
+                RecordingRootInput.Text.Trim(),
+                ExcelPathInput.Text.Trim());
+            MessageBox.Show(
+                this,
+                $"完整 {preview.CompleteCount}\n" +
+                $"仅文件名 {preview.FileNameOnlyCount}\n" +
+                $"Excel 关联 {preview.ExcelMatchedCount}\n" +
+                $"冲突 {preview.ConflictCount}\n" +
+                $"录像缺失 {preview.MissingVideoCount}\n" +
+                $"无效 {preview.InvalidCount}",
+                "旧数据检查完成",
+                MessageBoxButton.OK,
+                preview.InvalidCount > 0 ? MessageBoxImage.Warning : MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "检查失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void RecoverWorkspace_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (MessageBox.Show(
+                this,
+                "恢复前会备份当前数据库，并以字段更新时间智能合并。不会删除或覆盖录像文件。是否继续？",
+                "重建本机数据库",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) != MessageBoxResult.Yes)
+        {
+            return;
+        }
+        try
+        {
+            var service = CreateRecoveryService();
+            var preview = await service.PreviewAsync(
+                RecordingRootInput.Text.Trim(),
+                ExcelPathInput.Text.Trim());
+            var result = await service.RecoverAsync(preview);
+            MessageBox.Show(
+                this,
+                $"恢复完成：新增 {result.Added}，更新 {result.Updated}，跳过 {result.Skipped}。\n\n报告：{result.ReportPath}",
+                "恢复完成");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "恢复失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OpenRecoveryReports_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var root = Path.Combine(
+                Path.GetFullPath(RecordingRootInput.Text.Trim()),
+                ".unpackvision",
+                "recovery-reports");
+            Directory.CreateDirectory(root);
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{root}\"") { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, "无法打开恢复报告");
+        }
+    }
+
+    private WorkspaceRecoveryService CreateRecoveryService()
+    {
+        var storage = new StorageOptions { RecordingRoot = Require(RecordingRootInput.Text, "录像保存位置") };
+        var repository = new SqliteScanRecordRepository(storage);
+        repository.InitializeAsync().GetAwaiter().GetResult();
+        return new WorkspaceRecoveryService(repository, storage);
+    }
 
     private void ConfigureFirewall_OnClick(object sender, RoutedEventArgs e)
     {

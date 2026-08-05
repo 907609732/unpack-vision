@@ -55,13 +55,13 @@ public sealed class HikWatcherService : BackgroundService
                         var record = await _importer.ImportAsync(item.Path, item.Workflow, enqueueSync: true, stoppingToken);
                         if (record is not null)
                         {
-                            _logger.LogInformation("发现新录像 {TrackingNo}: {Path}", record.TrackingNo, record.VideoPath);
+                            _logger.LogInformation("发现并导入一段新录像");
                         }
                     }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    _logger.LogError(ex, "处理 HIK SCAN 录像失败：{Path}", item.Path);
+                    _logger.LogError(ex, "处理 HIK SCAN 录像失败");
                 }
                 finally
                 {
@@ -83,7 +83,7 @@ public sealed class HikWatcherService : BackgroundService
     {
         if (!Directory.Exists(directory))
         {
-            _logger.LogWarning("HIK SCAN 目录不存在：{Directory}", directory);
+            _logger.LogWarning("HIK SCAN 目录不存在，兼容导入将等待后续对账");
             return;
         }
         var watcher = new FileSystemWatcher(directory, "*.mp4")
@@ -177,7 +177,7 @@ public sealed class HikWatcherService : BackgroundService
             }
             await Task.Delay(_options.StableSampleDelayMilliseconds, cancellationToken);
         }
-        _logger.LogWarning("录像在等待时间内未完成：{Path}", path);
+        _logger.LogWarning("一段录像在等待时间内未完成写入");
         return false;
     }
 

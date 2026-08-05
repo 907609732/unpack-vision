@@ -21,6 +21,24 @@ public sealed class IssueTagAndFileNameTests
     }
 
     [Fact]
+    public void DefaultIssueTagsExposeStableUniqueMobileCommands()
+    {
+        var tags = IssueTagDefaults.Create();
+
+        Assert.Equal(4, tags.Count);
+        Assert.Equal(tags.Count, tags.Select(tag => tag.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(tags.Count, tags.Select(tag => tag.BarcodeValue).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Contains(tags, tag =>
+            tag.Id == IssueTagDefaults.MissingTagId &&
+            tag.Name == "少件" &&
+            tag.BarcodeValue == IssueTagDefaults.MissingBarcode);
+        Assert.Contains(tags, tag =>
+            tag.Id == IssueTagDefaults.PurchaseTagId &&
+            tag.Name == "采购" &&
+            tag.BarcodeValue == IssueTagDefaults.PurchaseBarcode);
+    }
+
+    [Fact]
     public void BuildsNormalAndChronologicalIssueFileNames()
     {
         var start = new DateTimeOffset(2026, 7, 20, 10, 35, 12, TimeSpan.FromHours(8));

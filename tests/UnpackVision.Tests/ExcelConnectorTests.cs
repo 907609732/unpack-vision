@@ -155,7 +155,7 @@ public sealed class ExcelConnectorTests : IDisposable
         using var document = SpreadsheetDocument.Open(workbook, false);
         var row = GetTargetRows(document.WorkbookPart!)[^1];
         Assert.Equal("COLLECT00123", FindCell(row, "B")!.InlineString!.InnerText);
-        Assert.Equal("【电商拆包智能录像】", FindCell(row, "E")!.InlineString!.InnerText);
+        Assert.Equal("【拆包智录】", FindCell(row, "E")!.InlineString!.InnerText);
     }
 
     [Fact]
@@ -174,7 +174,7 @@ public sealed class ExcelConnectorTests : IDisposable
         {
             var row = GetTargetRows(document.WorkbookPart!)[^1];
             var cell = FindCell(row, "E")!;
-            cell.InlineString = new InlineString(new Text("人工复核：待赔付\n【拆包智录】异常：破损；备注：外箱破裂"));
+            cell.InlineString = new InlineString(new Text("人工复核：待赔付\n【电商拆包智能录像】异常：破损；备注：外箱破裂"));
             cell.DataType = CellValues.InlineString;
             document.WorkbookPart!.Workbook!.Save();
         }
@@ -190,8 +190,8 @@ public sealed class ExcelConnectorTests : IDisposable
         using var verify = SpreadsheetDocument.Open(workbook, false);
         var text = FindCell(GetTargetRows(verify.WorkbookPart!)[^1], "E")!.InlineString!.InnerText;
         Assert.Contains("人工复核：待赔付", text);
-        Assert.Contains("【电商拆包智能录像】异常：破损、调包；备注：已拍照留证", text);
-        Assert.DoesNotContain("【拆包智录】", text);
+        Assert.Contains("【拆包智录】异常：破损、调包；备注：已拍照留证", text);
+        Assert.DoesNotContain("【电商拆包智能录像】", text);
         Assert.DoesNotContain("外箱破裂", text);
     }
 

@@ -36,7 +36,8 @@
         <TextBlock x:Name="AddressText" Foreground="#6E7380" />
         <TextBlock x:Name="ExpiryText" Margin="0,4,0,0" Foreground="#6E7380" />
       </StackPanel>
-      <Button Grid.Column="1" Content="刷新二维码" Padding="18,9" Click="RefreshButton_OnClick" />
+      <Button x:Name="RefreshButton" Grid.Column="1" Content="刷新二维码"
+              Padding="18,9" Click="RefreshButton_OnClick" />
     </Grid>
   </Grid>
 </Window>

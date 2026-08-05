@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:UnpackVision.App"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="电商拆包智能录像" Width="1480" Height="920"
+        Title="拆包智录" Width="1480" Height="920"
         MinWidth="1180" MinHeight="740" Background="#F3F5F8"
         WindowStartupLocation="CenterScreen" KeyDown="Window_OnKeyDown"
         WindowStyle="None" ResizeMode="CanResize" UseLayoutRounding="True" SnapsToDevicePixels="True">
@@ -85,18 +85,11 @@
           <ColumnDefinition Width="Auto" />
         </Grid.ColumnDefinitions>
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-          <Border Width="48" Height="48" CornerRadius="14" Background="#0A7AFF">
-            <Grid>
-              <Path Data="M12,15 L24,8 L36,15 L24,22 Z M12,15 L12,30 L24,38 L24,22 M36,15 L36,25"
-                    Stroke="White" StrokeThickness="2" StrokeLineJoin="Round" StrokeStartLineCap="Round"
-                    StrokeEndLineCap="Round" Stretch="Uniform" Margin="8" />
-              <Ellipse Width="15" Height="15" Fill="#0A7AFF" Stroke="White" StrokeThickness="2"
-                       HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,5,5" />
-              <Ellipse Width="4" Height="4" Fill="White" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,10.5,10.5" />
-            </Grid>
-          </Border>
+          <Image Source="{StaticResource AppBrandLogo}"
+                 Width="48" Height="48" Stretch="Uniform"
+                 RenderOptions.BitmapScalingMode="HighQuality" />
           <StackPanel Margin="13,0,0,0" VerticalAlignment="Center">
-            <TextBlock Text="电商拆包智能录像" FontSize="21" FontWeight="SemiBold" Foreground="#1D1D1F" />
+            <TextBlock Text="拆包智录" FontSize="21" FontWeight="SemiBold" Foreground="#1D1D1F" />
             <TextBlock Text="拆包录像与数据同步" FontSize="11.5" Foreground="#7C7C82" Margin="0,2,0,0" />
           </StackPanel>
         </StackPanel>
@@ -353,16 +346,16 @@
                       <Grid Grid.Column="1">
                         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
                         <StackPanel Orientation="Horizontal">
-                          <TextBox Text="{Binding TrackingNo}" Style="{StaticResource SelectableText}"
+                          <TextBox Text="{Binding TrackingNo, Mode=OneWay}" Style="{StaticResource SelectableText}"
                                    FontSize="14.5" FontWeight="SemiBold" Foreground="#252529" />
                           <Border Background="#FFF3DC" CornerRadius="8" Padding="6,2" Margin="6,0,0,0">
                             <TextBlock Text="重复" Foreground="#A96700" FontSize="10"
                                        Visibility="{Binding IsDuplicate, Converter={StaticResource BooleanToVisibilityConverter}}" />
                           </Border>
                         </StackPanel>
-                        <TextBox Grid.Row="1" Text="{Binding TimeText}" Style="{StaticResource SelectableText}"
+                        <TextBox Grid.Row="1" Text="{Binding TimeText, Mode=OneWay}" Style="{StaticResource SelectableText}"
                                  Foreground="#79797E" FontSize="11" Margin="0,6,0,0" />
-                        <TextBox Grid.Row="2" Text="{Binding FileSizeText}" Style="{StaticResource SelectableText}"
+                        <TextBox Grid.Row="2" Text="{Binding FileSizeText, Mode=OneWay}" Style="{StaticResource SelectableText}"
                                  Foreground="#8A8A90" FontSize="11" Margin="0,3,0,0" />
                         <StackPanel Grid.Row="3" Orientation="Horizontal" VerticalAlignment="Bottom" Margin="0,6,0,0">
                           <Button Content="播放" Padding="9,4" MinHeight="26" FontSize="11" Tag="{Binding}" Click="RecentPlayButton_OnClick" />
@@ -405,7 +398,7 @@
                  KeyDown="ScannerInput_OnKeyDown" />
         <TextBox x:Name="SyncStatusText" Text="Excel：等待任务" Style="{StaticResource SelectableText}" Foreground="#8C8C91" FontSize="10"
                    VerticalAlignment="Center" Margin="12,0,0,0" />
-        <TextBlock Text="版本 2.2.0 · 开发者 五成" Foreground="#A0A0A5" FontSize="10" VerticalAlignment="Center" Margin="14,0,0,0" />
+        <TextBlock Text="版本 2.3.2 · 开发者 五成" Foreground="#A0A0A5" FontSize="10" VerticalAlignment="Center" Margin="14,0,0,0" />
       </StackPanel>
     </Grid>
 

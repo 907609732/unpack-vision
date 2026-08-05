@@ -1,0 +1,22 @@
+{
+  "name": "unpack-vision-anonymous-dau",
+  "version": "2.3.2",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit && wrangler deploy --dry-run --config wrangler.example.toml",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute unpack-vision-dau --remote --file schema.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260729.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.118.0"
+  },
+  "dependencies": {
+    "jose": "^6.1.3"
+  },
+  "overrides": {
+    "undici": "7.29.0"
+  }
+}

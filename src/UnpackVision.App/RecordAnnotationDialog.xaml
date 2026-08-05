@@ -27,7 +27,7 @@
       <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <TextBlock Text="备注" FontWeight="SemiBold"/>
         <TextBox x:Name="NoteInput" Grid.Row="1" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" MaxLength="2000" Margin="0,9,0,0"/>
-        <TextBox Grid.Row="2" Text="只修改【电商拆包智能录像】自己的 Excel 备注，人工备注会保留。"
+        <TextBox Grid.Row="2" Text="只修改【拆包智录】自己的 Excel 备注，人工备注会保留。"
                  Style="{StaticResource SelectableText}" Foreground="{StaticResource TextSecondaryBrush}"
                  FontSize="11" Margin="0,8,0,0"/>
       </Grid>

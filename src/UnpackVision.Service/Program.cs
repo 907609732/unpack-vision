@@ -1,10 +1,30 @@
+using System.Diagnostics;
 using UnpackVision.Core;
 using UnpackVision.Infrastructure;
+using UnpackVision.Infrastructure.Diagnostics;
 using UnpackVision.Service;
 
+DiagnosticLog.Initialize("sync-service", "2.3.2");
+DiagnosticLog.RegisterGlobalExceptionHandlers();
+DiagnosticLog.Information("兼容同步服务正在启动");
+
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.AddProvider(DiagnosticLog.CreateLoggerProvider());
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 var storageOptions = BindOptions<StorageOptions>(builder.Configuration, "Storage");
 var excelOptions = BindOptions<ExcelConnectorOptions>(builder.Configuration, "Excel");
+var localSettings = await new LocalSettingsStore().LoadAsync();
+var allowTestInstance = string.Equals(
+    Environment.GetEnvironmentVariable("UNPACKVISION_ALLOW_TEST_INSTANCE"),
+    "1",
+    StringComparison.Ordinal);
+if (!allowTestInstance)
+{
+    // Production follows the desktop settings. Smoke tests keep their explicit
+    // temporary paths so validation can never read or write real business data.
+    storageOptions.RecordingRoot = localSettings.RecordingRoot;
+    excelOptions.WorkbookPath = localSettings.ExcelWorkbookPath;
+}
 var hikOptions = BindOptions<HikCompatibilityOptions>(builder.Configuration, "HikCompatibility");
 var securityOptions = BindOptions<SecurityOptions>(builder.Configuration, "Security");
 var webhookOptions = BindOptions<WebhookOptions>(builder.Configuration, "Webhooks");
@@ -15,7 +35,11 @@ builder.Services.AddSingleton(hikOptions);
 builder.Services.AddSingleton(securityOptions);
 builder.Services.AddSingleton(webhookOptions);
 builder.Services.AddSingleton<IClock, SystemClock>();
-builder.Services.AddSingleton<IScanRecordRepository, SqliteScanRecordRepository>();
+builder.Services.AddSingleton<SqliteScanRecordRepository>();
+builder.Services.AddSingleton<IScanRecordRepository>(services =>
+    new PortableCatalogScanRecordRepository(
+        services.GetRequiredService<SqliteScanRecordRepository>(),
+        () => new PortableRecordCatalog(storageOptions.RecordingRoot)));
 builder.Services.AddSingleton<ExcelConnector>();
 builder.Services.AddSingleton<ISyncConnector>(services => services.GetRequiredService<ExcelConnector>());
 builder.Services.AddSingleton<SyncDispatcher>();
@@ -34,6 +58,9 @@ builder.Services.AddHostedService<SyncWorkerService>();
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
+var requestLogger = app.Services
+    .GetRequiredService<ILoggerFactory>()
+    .CreateLogger("UnpackVision.Requests");
 var repository = app.Services.GetRequiredService<IScanRecordRepository>();
 await repository.InitializeAsync();
 var apiKeyStore = app.Services.GetRequiredService<ApiKeyStore>();
@@ -42,8 +69,42 @@ var apiKey = await apiKeyStore.GetOrCreateAsync();
 if (args.Contains("--show-api-key", StringComparer.OrdinalIgnoreCase))
 {
     Console.WriteLine(apiKey);
+    DiagnosticLog.Information("按显式命令显示本机 API 密钥后退出");
+    DiagnosticLog.CloseAndFlush();
     return;
 }
+
+app.Use(async (context, next) =>
+{
+    var startedAt = Stopwatch.GetTimestamp();
+    try
+    {
+        await next();
+    }
+    catch (Exception exception)
+    {
+        requestLogger.LogError(
+            exception,
+            "HTTP 请求失败，端点 {EndpointTemplate}，方法 {HttpMethod}",
+            GetEndpointTemplate(context),
+            context.Request.Method);
+        throw;
+    }
+    finally
+    {
+        var elapsed = Stopwatch.GetElapsedTime(startedAt);
+        if (elapsed >= TimeSpan.FromSeconds(2) ||
+            context.Response.StatusCode >= StatusCodes.Status500InternalServerError)
+        {
+            requestLogger.LogWarning(
+                "HTTP 请求缓慢或失败，端点 {EndpointTemplate}，方法 {HttpMethod}，状态 {StatusCode}，耗时 {ElapsedMilliseconds} 毫秒",
+                GetEndpointTemplate(context),
+                context.Request.Method,
+                context.Response.StatusCode,
+                elapsed.TotalMilliseconds);
+        }
+    }
+});
 
 app.Use(async (context, next) =>
 {
@@ -249,7 +310,20 @@ app.MapGet("/api/v1/ocr/health", (IOfflineOcrService ocr) => Results.Ok(new
     cloudFallback = false
 }));
 
-await app.RunAsync();
+try
+{
+    await app.RunAsync();
+}
+finally
+{
+    DiagnosticLog.Information("兼容同步服务正在停止");
+    DiagnosticLog.CloseAndFlush();
+}
+
+static string GetEndpointTemplate(HttpContext context) =>
+    context.GetEndpoint() is RouteEndpoint routeEndpoint
+        ? routeEndpoint.RoutePattern.RawText ?? "unknown"
+        : "unmatched";
 
 static T BindOptions<T>(IConfiguration configuration, string sectionName) where T : new()
 {

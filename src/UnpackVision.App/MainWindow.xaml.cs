@@ -10,6 +10,8 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using UnpackVision.Application.Recording;
+using UnpackVision.Application.Scanning;
 using UnpackVision.Core;
 using UnpackVision.Infrastructure;
 
@@ -80,7 +82,10 @@ public partial class MainWindow : Window
             _storageOptions = new StorageOptions { RecordingRoot = _settings.RecordingRoot };
             var excelOptions = CreateExcelOptions();
 
-            _repository = new SqliteScanRecordRepository(_storageOptions);
+            var sqliteRepository = new SqliteScanRecordRepository(_storageOptions);
+            _repository = new PortableCatalogScanRecordRepository(
+                sqliteRepository,
+                () => new PortableRecordCatalog(_storageOptions.RecordingRoot));
             await _repository.InitializeAsync(_lifetime.Token);
             var interrupted = await new InterruptedRecordingRecovery(_repository, new SystemClock())
                 .MarkInterruptedAsync(_lifetime.Token);
@@ -354,95 +359,6 @@ public partial class MainWindow : Window
         FooterText.Text = message;
     }
 
-    private async void OnStationStateTimer(object? sender, EventArgs e) =>
-        await PollStationStateAsync();
-
-    private async Task PollStationStateAsync()
-    {
-        if (_stationStatePollActive || _repository is null || _lifetime.IsCancellationRequested)
-        {
-            return;
-        }
-
-        _stationStatePollActive = true;
-        try
-        {
-            var stationId = Uri.EscapeDataString(Environment.MachineName);
-            var snapshot = await StationHostConnection.Http.GetFromJsonAsync<StationStateSnapshot>(
-                $"/api/v1/stations/{stationId}/state",
-                StationHostConnection.JsonOptions,
-                _lifetime.Token);
-            if (snapshot is null)
-            {
-                return;
-            }
-
-            var localRecording = _coordinator?.State is RecordingState.Starting or RecordingState.Recording or RecordingState.Saving;
-            switch (snapshot.RecordingState)
-            {
-                case RecordingState.Starting when !localRecording:
-                    CurrentStateText.Text = "手机指令 · 正在启动录像";
-                    StateDot.Fill = Brushes.Orange;
-                    FooterText.Text = snapshot.TrackingNo is { Length: > 0 }
-                        ? $"已收到手机扫码：{snapshot.TrackingNo}"
-                        : "已收到手机扫码，正在启动录像";
-                    break;
-
-                case RecordingState.Recording when !localRecording && snapshot.RecordId is { } recordId:
-                    if (_mirroredStationRecordId != recordId)
-                    {
-                        var record = await _repository.GetAsync(recordId, _lifetime.Token);
-                        if (record is not null)
-                        {
-                            _mirroredStationRecordId = recordId;
-                            ShowRecordingUi(record);
-                            FooterText.Text = $"手机扫码已触发录像：{record.TrackingNo}";
-                            Speak("手机扫码，开始录制");
-                        }
-                    }
-                    break;
-
-                case RecordingState.Saving when _mirroredStationRecordId is not null:
-                    CurrentStateText.Text = "手机指令 · 正在保存";
-                    StateDot.Fill = Brushes.Orange;
-                    FooterText.Text = "手机已发出结束指令，正在保存录像";
-                    break;
-
-                case RecordingState.Idle when _mirroredStationRecordId is not null:
-                case RecordingState.Completed when _mirroredStationRecordId is not null:
-                case RecordingState.Failed when _mirroredStationRecordId is not null:
-                    var failed = snapshot.RecordingState == RecordingState.Failed;
-                    _mirroredStationRecordId = null;
-                    ShowIdleUi(failed ? "手机指令录像失败，请查看全部记录" : "手机指令录像已保存，可以继续扫描");
-                    Speak(failed ? "录像失败，请检查记录" : "录像已保存");
-                    await RefreshRecentAsync();
-                    break;
-            }
-
-        }
-        catch (HttpRequestException)
-        {
-            if (_mirroredStationRecordId is not null)
-            {
-                FooterText.Text = "工位主机连接中断，正在自动重连";
-            }
-        }
-        catch (JsonException)
-        {
-            FooterText.Text = "工位主机状态格式异常，正在自动重试";
-        }
-        catch (TaskCanceledException) when (!_lifetime.IsCancellationRequested)
-        {
-        }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
-        {
-        }
-        finally
-        {
-            _stationStatePollActive = false;
-        }
-    }
-
     private async void OnRecordingTimer(object? sender, EventArgs e)
     {
         if (_recordingStartedAt is null)
@@ -545,11 +461,14 @@ public partial class MainWindow : Window
                 .Where(record => record.State is RecordingState.Completed or RecordingState.Imported or RecordingState.Failed)
                 .Take(20)
                 .ToArray();
-            var items = await Task.WhenAll(records.Select(async record =>
-            {
-                var delivery = await _repository.GetDeliveryAsync(record.Id, "excel", _lifetime.Token);
-                return await RecentRecordingItem.CreateAsync(record, delivery);
-            }));
+            var deliveries = await _repository.GetLatestDeliveriesAsync(
+                records.Select(record => record.Id).ToArray(),
+                "excel",
+                _lifetime.Token);
+            var items = await Task.WhenAll(records.Select(record =>
+                RecentRecordingItem.CreateAsync(
+                    record,
+                    deliveries.GetValueOrDefault(record.Id))));
             RecentItemsControl.ItemsSource = items;
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
@@ -853,6 +772,8 @@ public partial class MainWindow : Window
     private async Task OpenSettingsAsync(bool showCameraTab)
     {
         var previousCamera = _settings.Camera;
+        var previousRecordingRoot = _settings.RecordingRoot;
+        var previousExcelPath = _settings.ExcelWorkbookPath;
         var dialog = new SettingsWindow(_settings, showCameraTab) { Owner = this };
         if (dialog.ShowDialog() != true || dialog.SavedSettings is null)
         {
@@ -860,11 +781,39 @@ public partial class MainWindow : Window
             return;
         }
         _settings = dialog.SavedSettings;
+        var workspace = await new PortableRecordCatalog(_settings.RecordingRoot)
+            .EnsureWorkspaceAsync(
+                string.Equals(previousRecordingRoot, _settings.RecordingRoot, StringComparison.OrdinalIgnoreCase)
+                    ? _settings.Setup.WorkspaceId
+                    : null,
+                _lifetime.Token);
+        _settings.Setup.WorkspaceId = workspace.WorkspaceId;
+        _settings.Setup.Version = SetupState.CurrentVersion;
+        _settings.Setup.CompletedAt ??= DateTimeOffset.Now;
+        _settings.Setup.ExcelSkipped = string.IsNullOrWhiteSpace(_settings.ExcelWorkbookPath);
         await _settingsStore.SaveAsync(_settings, _lifetime.Token);
+        await App.ApplyTelemetryAsync(_settings, _lifetime.Token);
         _storageOptions!.RecordingRoot = _settings.RecordingRoot;
         _coordinator?.UpdateScannerProfile(_settings.Scanner);
         RebuildStationRouter();
         _syncDispatcher = new SyncDispatcher(_repository!, [new ExcelConnector(CreateExcelOptions())], new SystemClock());
+        if (string.IsNullOrWhiteSpace(previousExcelPath) &&
+            !string.IsNullOrWhiteSpace(_settings.ExcelWorkbookPath) &&
+            MessageBox.Show(
+                this,
+                "是否把数据库中尚未同步的历史完成记录加入 Excel 同步队列？",
+                "补同步历史记录",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) == MessageBoxResult.Yes)
+        {
+            foreach (var record in await _repository!.QueryAsync(limit: 2000, cancellationToken: _lifetime.Token))
+            {
+                if (record.State is RecordingState.Completed or RecordingState.Imported or RecordingState.Collected)
+                {
+                    await _repository.EnqueueDeliveryAsync(record.Id, "excel", _lifetime.Token);
+                }
+            }
+        }
         ApplySettingsVisuals();
         if (_recordingBackend is not null)
         {
@@ -1027,138 +976,6 @@ public partial class MainWindow : Window
         LabelDesigner.ConfigureIssueTags(_settings.IssueTags);
     }
 
-    private async Task ProcessIssueBarcodeAsync(IssueBarcodeMatch match)
-    {
-        if (_coordinator?.State != RecordingState.Recording || _coordinator.CurrentRecord is null ||
-            _repository is null || _recordingBackend is null)
-        {
-            FooterText.Text = "当前没有正在录像的包裹，异常标签未添加";
-            Speak("当前没有正在录像的包裹");
-            return;
-        }
-
-        if (match.Action == IssueBarcodeAction.UndoLastTag)
-        {
-            await UndoLastIssueTagAsync();
-            return;
-        }
-
-        if (match.Tag is null)
-        {
-            return;
-        }
-        var record = _coordinator.CurrentRecord;
-        var alreadyActive = record.Tags.Any(item => item.IsActive &&
-            string.Equals(item.TagId, match.Tag.Id, StringComparison.OrdinalIgnoreCase));
-        await _repository.AddTagAsync(record.Id, match.Tag, DateTimeOffset.Now, "scanner", _lifetime.Token);
-        record.Tags = await _repository.GetTagsAsync(record.Id, false, _lifetime.Token);
-        record.UpdatedAt = DateTimeOffset.Now;
-        await _recordingBackend.UpdateIssueOverlayAsync(record.Id, record.Tags, _lifetime.Token);
-
-        if (!alreadyActive && _settings.CaptureSnapshotOnIssueTag)
-        {
-            try
-            {
-                var snapshot = await _recordingBackend.TakeSnapshotAsync(_lifetime.Token);
-                record.Snapshots = [.. record.Snapshots, snapshot];
-                await _repository.UpdateAsync(record, _lifetime.Token);
-            }
-            catch (Exception ex)
-            {
-                FooterText.Text = $"标签已保存，但自动截图失败：{ex.Message}";
-            }
-        }
-
-        UpdateIssueUi(record);
-        FooterText.Text = alreadyActive ? $"已经标记：{match.Tag.Name}" : $"已标记：{match.Tag.Name}";
-        Speak(alreadyActive ? $"已经标记{match.Tag.Name}" : $"已标记{match.Tag.Name}");
-        ScannerInput.Focus();
-    }
-
-    private async Task UndoLastIssueTagAsync()
-    {
-        if (_coordinator?.CurrentRecord is not { } record || _repository is null || _recordingBackend is null)
-        {
-            return;
-        }
-        var removed = await _repository.UndoLastTagAsync(record.Id, DateTimeOffset.Now, _lifetime.Token);
-        if (removed is null)
-        {
-            FooterText.Text = "当前录像没有可撤销的异常标签";
-            Speak("没有可撤销的异常标签");
-            return;
-        }
-        record.Tags = await _repository.GetTagsAsync(record.Id, false, _lifetime.Token);
-        await _recordingBackend.UpdateIssueOverlayAsync(record.Id, record.Tags, _lifetime.Token);
-        UpdateIssueUi(record);
-        FooterText.Text = $"已撤销标签：{removed.TagName}";
-        Speak($"已撤销{removed.TagName}");
-        ScannerInput.Focus();
-    }
-
-    private void UpdateIssueUi(ScanRecord record)
-    {
-        var active = record.Tags.Where(item => item.IsActive).OrderBy(item => item.TaggedAt).ToArray();
-        ActiveIssueSummaryText.Text = active.Length == 0
-            ? "当前没有异常标签"
-            : $"异常：{string.Join("、", active.Select(item => item.TagName))}";
-        WatermarkIssueText.Text = string.Join("\n", active.Select(item => $"异常：{item.TagName} {item.TaggedAt.LocalDateTime:HH:mm:ss}"));
-        _loadingIssueNote = true;
-        IssueNoteInput.Text = record.Note;
-        _loadingIssueNote = false;
-    }
-
-    private async void QuickIssueTagButton_OnClick(object sender, RoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.Tag is IssueTagDefinition tag)
-        {
-            await ProcessIssueBarcodeAsync(new IssueBarcodeMatch(IssueBarcodeAction.AddTag, tag));
-        }
-    }
-
-    private async void UndoIssueTagButton_OnClick(object sender, RoutedEventArgs e) =>
-        await ProcessIssueBarcodeAsync(new IssueBarcodeMatch(IssueBarcodeAction.UndoLastTag));
-
-    private void IssueNoteInput_OnTextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_loadingIssueNote || _coordinator?.State != RecordingState.Recording)
-        {
-            return;
-        }
-        _noteSaveTimer.Stop();
-        _noteSaveTimer.Start();
-    }
-
-    private async void SaveNoteTimer_OnTick(object? sender, EventArgs e)
-    {
-        _noteSaveTimer.Stop();
-        await SaveIssueNoteAsync();
-    }
-
-    private async Task FlushIssueNoteAsync()
-    {
-        _noteSaveTimer.Stop();
-        await SaveIssueNoteAsync();
-    }
-
-    private async Task SaveIssueNoteAsync()
-    {
-        if (_coordinator?.CurrentRecord is not { } record || _repository is null || _loadingIssueNote)
-        {
-            return;
-        }
-        var note = IssueNoteInput.Text.Trim();
-        if (string.Equals(note, record.Note, StringComparison.Ordinal))
-        {
-            return;
-        }
-        var now = DateTimeOffset.Now;
-        await _repository.UpdateNoteAsync(record.Id, note, now, _lifetime.Token);
-        record.Note = note;
-        record.NoteUpdatedAt = now;
-        FooterText.Text = "备注已保存";
-    }
-
     private void RecordingPageButton_OnClick(object sender, RoutedEventArgs e) => ShowDesignerPage(false);
     private void BarcodePageButton_OnClick(object sender, RoutedEventArgs e) => ShowDesignerPage(true);
 
@@ -1246,74 +1063,6 @@ public partial class MainWindow : Window
         }
         _speech.Speak(message, _settings.VoiceVolume);
     }
-
-    private void RebuildStationRouter()
-    {
-        if (_coordinator is null || _repository is null || _scanCommandLedger is null)
-        {
-            return;
-        }
-        _stationRouter = new StationScanCommandRouter(
-            _coordinator,
-            _repository,
-            new SystemClock(),
-            _settings.Scanner,
-            Environment.MachineName,
-            "excel",
-            _settings.IssueTags,
-            _scanCommandLedger);
-    }
-
-    private async Task<ScanAcknowledgement> RouteMobileCommandAsync(
-        ScanCommand command,
-        CancellationToken cancellationToken)
-    {
-        if (_stationRouter is null)
-        {
-            throw new InvalidOperationException("桌面录像核心尚未就绪");
-        }
-        return await Dispatcher.InvokeAsync(
-            async () =>
-            {
-                var acknowledgement = await _stationRouter.RouteAsync(command, cancellationToken);
-                ApplyMobileCommandAcknowledgement(command, acknowledgement);
-                return acknowledgement;
-            },
-            DispatcherPriority.Normal).Task.Unwrap();
-    }
-
-    private void ApplyMobileCommandAcknowledgement(ScanCommand command, ScanAcknowledgement acknowledgement)
-    {
-        if (command.Mode != DeviceOperatingMode.IssueRemote)
-        {
-            return;
-        }
-
-        if (_coordinator?.CurrentRecord is { } current)
-        {
-            UpdateIssueUi(current);
-        }
-
-        switch (acknowledgement.Action)
-        {
-            case ScanCommandAction.IssueTagged:
-            case ScanCommandAction.IssueUndone:
-            case ScanCommandAction.NoteUpdated:
-            case ScanCommandAction.SnapshotCaptured:
-            case ScanCommandAction.Rejected:
-            case ScanCommandAction.Failed:
-            case ScanCommandAction.Ignored:
-                Speak(acknowledgement.Message);
-                break;
-        }
-    }
-
-    private StationStateSnapshot GetDesktopStationState() => new(
-        Environment.MachineName,
-        _coordinator?.State ?? RecordingState.Idle,
-        _coordinator?.CurrentRecord?.Id,
-        _coordinator?.CurrentRecord?.TrackingNo,
-        DateTimeOffset.Now);
 
     private async void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {

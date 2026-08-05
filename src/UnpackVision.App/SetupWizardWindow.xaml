@@ -1,0 +1,154 @@
+<Window x:Class="UnpackVision.App.SetupWizardWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="首次配置 · 拆包智录"
+        Width="860" Height="680" MinWidth="760" MinHeight="620"
+        Background="#F2F4F8" WindowStartupLocation="CenterScreen">
+  <Grid>
+    <Grid.ColumnDefinitions>
+      <ColumnDefinition Width="220" />
+      <ColumnDefinition Width="*" />
+    </Grid.ColumnDefinitions>
+
+    <Border Background="#EAF0F8" BorderBrush="#16000000" BorderThickness="0,0,1,0">
+      <Grid Margin="26,32">
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="*" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <StackPanel>
+          <Image Source="{StaticResource AppBrandLogo}" Width="66" Height="66"
+                 HorizontalAlignment="Left" Stretch="Uniform" />
+          <TextBlock Text="开始使用" FontSize="25" FontWeight="SemiBold" Margin="0,16,0,0" />
+          <TextBlock Text="大约需要 1 分钟" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,5,0,0" />
+        </StackPanel>
+        <StackPanel Grid.Row="1" Margin="0,34,0,0">
+          <TextBlock x:Name="Step1Label" Text="1  欢迎" Margin="0,0,0,19" />
+          <TextBlock x:Name="Step2Label" Text="2  录像目录" Margin="0,0,0,19" />
+          <TextBlock x:Name="Step3Label" Text="3  Excel 表格" Margin="0,0,0,19" />
+          <TextBlock x:Name="Step4Label" Text="4  恢复检查" Margin="0,0,0,19" />
+          <TextBlock x:Name="Step5Label" Text="5  完成" />
+        </StackPanel>
+        <TextBlock Grid.Row="2" Text="开发者：五成 · 版本 2.3.2"
+                   Foreground="#7D8494" TextWrapping="Wrap" />
+      </Grid>
+    </Border>
+
+    <Grid Grid.Column="1" Margin="38,32,38,26">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto" />
+        <RowDefinition Height="*" />
+        <RowDefinition Height="Auto" />
+      </Grid.RowDefinitions>
+      <StackPanel>
+        <TextBlock x:Name="StepTitle" FontSize="28" FontWeight="SemiBold" />
+        <TextBlock x:Name="StepDescription" Margin="0,7,0,0"
+                   Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+        <ProgressBar x:Name="StepProgress" Height="4" Minimum="0" Maximum="5"
+                     Margin="0,22,0,0" Foreground="{StaticResource PrimaryBrush}" />
+      </StackPanel>
+
+      <Grid Grid.Row="1" Margin="0,24,0,18">
+        <StackPanel x:Name="WelcomePanel">
+          <Border Background="White" CornerRadius="22" Padding="26"
+                  BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+            <StackPanel>
+              <TextBlock Text="业务数据由你自己保管" FontSize="20" FontWeight="SemiBold" />
+              <TextBlock Margin="0,13,0,0" TextWrapping="Wrap" LineHeight="25"
+                         Text="录像、单号、异常标签和备注默认保存在你的电脑。软件会在录像目录中建立一个隐藏的便携索引；以后重装软件或更换电脑，只要重新选择原录像目录和 Excel，就能恢复记录。" />
+              <Border Background="#EDF6FF" CornerRadius="15" Padding="16" Margin="0,20,0,0">
+                <TextBlock TextWrapping="Wrap" Foreground="#245A8D"
+                           Text="便携索引不保存摄像头密码、手机令牌或 API 密钥。更换电脑后，手机需要重新扫码配对。" />
+              </Border>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <StackPanel x:Name="StoragePanel" Visibility="Collapsed">
+          <TextBlock Text="录像保存位置" FontSize="17" FontWeight="SemiBold" />
+          <Grid Margin="0,12,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <TextBox x:Name="RecordingRootInput" Height="42" />
+            <Button Grid.Column="1" Content="选择目录" Margin="10,0,0,0"
+                    Click="BrowseRecordingRoot_OnClick" />
+          </Grid>
+          <Border Background="White" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                  CornerRadius="18" Padding="19" Margin="0,20,0,0">
+            <StackPanel>
+              <TextBlock Text="目录检查" FontSize="17" FontWeight="SemiBold" />
+              <TextBlock x:Name="StorageStatusText" Margin="0,10,0,0"
+                         Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+              <Button Content="检查目录" HorizontalAlignment="Left" Margin="0,14,0,0"
+                      Style="{StaticResource SecondaryButton}" Click="CheckStorage_OnClick" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+
+        <StackPanel x:Name="ExcelPanel" Visibility="Collapsed">
+          <TextBlock Text="Excel 工作簿" FontSize="17" FontWeight="SemiBold" />
+          <TextBlock Text="可以绑定现有业务表，也可以生成标准六列表格。暂时跳过不会影响录像。"
+                     Foreground="{StaticResource TextSecondaryBrush}" Margin="0,7,0,0" TextWrapping="Wrap" />
+          <TextBox x:Name="ExcelPathInput" Height="42" Margin="0,18,0,0" />
+          <WrapPanel Margin="0,12,0,0">
+            <Button Content="选择现有表格" Click="BrowseExcel_OnClick" />
+            <Button Content="生成新表格" Style="{StaticResource SecondaryButton}"
+                    Margin="10,0,0,0" Click="CreateExcel_OnClick" />
+            <Button Content="暂时跳过" Style="{StaticResource SecondaryButton}"
+                    Margin="10,0,0,0" Click="SkipExcel_OnClick" />
+          </WrapPanel>
+          <Border Background="#F7F9FC" CornerRadius="15" Padding="15" Margin="0,18,0,0">
+            <TextBlock x:Name="ExcelStatusText" Text="尚未选择 Excel"
+                       Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+          </Border>
+        </StackPanel>
+
+        <Grid x:Name="RecoveryPanel" Visibility="Collapsed">
+          <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+          <Border Background="White" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                  CornerRadius="18" Padding="18">
+            <StackPanel>
+              <TextBlock Text="历史数据扫描结果" FontSize="18" FontWeight="SemiBold" />
+              <TextBlock x:Name="RecoverySummaryText" Margin="0,9,0,0"
+                         Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap" />
+              <CheckBox x:Name="RecoverDataCheck" Content="完成配置时将可恢复记录合并到本机数据库"
+                        Margin="0,13,0,0" IsChecked="True" />
+            </StackPanel>
+          </Border>
+          <ListBox x:Name="RecoveryItemsList" Grid.Row="1" Margin="0,14,0,0"
+                   BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <TextBlock Text="{Binding Description}" Margin="10,8" TextWrapping="Wrap" />
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Grid>
+
+        <StackPanel x:Name="FinishPanel" Visibility="Collapsed">
+          <Border Background="White" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                  CornerRadius="22" Padding="24">
+            <StackPanel>
+              <TextBlock Text="配置已准备好" FontSize="22" FontWeight="SemiBold" />
+              <TextBlock x:Name="FinishSummaryText" Margin="0,14,0,0"
+                         TextWrapping="Wrap" LineHeight="24" />
+              <TextBlock x:Name="FinishRecoveryText" Margin="0,13,0,0"
+                         Foreground="#24834E" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </Grid>
+
+      <Grid Grid.Row="2">
+        <Button x:Name="BackButton" Content="上一步" Width="110" HorizontalAlignment="Left"
+                Style="{StaticResource SecondaryButton}" Click="Back_OnClick" />
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button Content="退出" Width="90" Style="{StaticResource SecondaryButton}"
+                  Click="Exit_OnClick" />
+          <Button x:Name="NextButton" Content="下一步" Width="118" Margin="10,0,0,0"
+                  Click="Next_OnClick" />
+        </StackPanel>
+      </Grid>
+    </Grid>
+  </Grid>
+</Window>

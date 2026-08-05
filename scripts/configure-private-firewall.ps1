@@ -18,10 +18,10 @@ if ($null -eq $stationHost) {
 }
 
 $rules = @(
-    @{ Name = '电商拆包智能录像-HTTPS'; Protocol = 'TCP'; Port = '5273' },
-    @{ Name = '电商拆包智能录像-RTSPS'; Protocol = 'TCP'; Port = '8555' },
-    @{ Name = '电商拆包智能录像-WebRTC-TCP'; Protocol = 'TCP'; Port = '8889' },
-    @{ Name = '电商拆包智能录像-WebRTC-UDP'; Protocol = 'UDP'; Port = '8189' }
+    @{ Name = '拆包智录-HTTPS'; Protocol = 'TCP'; Port = '5273' },
+    @{ Name = '拆包智录-RTSPS'; Protocol = 'TCP'; Port = '8555' },
+    @{ Name = '拆包智录-WebRTC-TCP'; Protocol = 'TCP'; Port = '8889' },
+    @{ Name = '拆包智录-WebRTC-UDP'; Protocol = 'UDP'; Port = '8189' }
 )
 
 foreach ($rule in $rules) {
@@ -35,6 +35,6 @@ foreach ($rule in $rules) {
         -Program $stationHost.FullName `
         -Protocol $rule.Protocol `
         -LocalPort $rule.Port `
-        -Description '仅允许专用网络中的已配对手机访问电商拆包智能录像工位。' |
+        -Description '仅允许专用网络中的已配对手机访问拆包智录工位。' |
         Out-Null
 }

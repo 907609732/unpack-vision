@@ -2,8 +2,8 @@ package com.unpackvision.mobile
 
 object MobileLegalDocuments {
     const val TERMS = """
-电商拆包智能录像用户协议
-版本：2026-07-29
+拆包智录用户协议
+版本：2026-07-29（2.3）
 
 本软件由开发者“五成”提供，是面向中小商家的开源拆包录像、扫码和数据同步工具。软件按现状提供，使用者应确认对拍摄的包裹、面单和工作场所具有合法处理权限。
 
@@ -17,10 +17,10 @@ object MobileLegalDocuments {
 """
 
     const val PRIVACY = """
-电商拆包智能录像隐私政策
-版本：2026-07-29
+拆包智录隐私政策
+版本：2026-07-29（2.3）
 
-2.2.0 不部署活跃用户统计服务器，不生成稳定安装标识，不上传快递单号、录像、备注、Excel 路径、摄像头名称或配对信息。
+2.3.0 不上传快递单号、录像、备注、Excel 路径、摄像头名称、硬件标识、账号或配对信息。
 
 手机端会在本机保存加密后的工位令牌、应用设置和尚未发送的离线扫码事件。工位令牌由 Android Keystore 保护。
 
@@ -30,7 +30,9 @@ object MobileLegalDocuments {
 
 相机权限仅在进入配对、扫码或摄像功能时申请；通知权限只用于版本更新提醒；安装 APK 由安卓系统单独授权。麦克风录音默认关闭，当前版本不申请麦克风权限。
 
-匿名使用统计接口在 2.2.0 中为空实现。未来如增加统计或诊断，必须独立征得同意，拒绝或撤回不会影响核心功能。
+首次协议页提供独立的匿名日活选项。该选项默认勾选，但可以在同意前取消，也可以在设置中随时关闭；拒绝或撤回不会影响任何功能。
+
+启用后每天最多发送一次：北京时间日期、由 Android Keystore 随机密钥按日计算且不可跨日关联的匿名值、Android、软件版本和发布通道。不读取 IMEI、MAC 地址、账号、硬盘或手机序列号。原始匿名日记录保留35天，每日汇总数字保留24个月。
 
 赞助页面不接入支付 SDK，不读取付款人、金额、订单、账号或付款结果。
 """
@@ -38,8 +40,8 @@ object MobileLegalDocuments {
 
 data class MobileDonationProfile(
     val developerName: String = "五成",
-    val alipayDrawableName: String = "",
-    val alipaySha256: String = "",
-    val weChatDrawableName: String = "",
-    val weChatSha256: String = ""
+    val alipayDrawableName: String = "donation_alipay",
+    val alipaySha256: String = "5CB45BCFC0BBCEAEB7ABC600E0BC840BC589185821CF660195E3CA1751DD4364",
+    val weChatDrawableName: String = "donation_wechat",
+    val weChatSha256: String = "B2967005849581FCA0F329A10D52543BD67728A63911E69B8C245B5A74F0BB2D"
 )
