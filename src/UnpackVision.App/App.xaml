@@ -1,9 +1,16 @@
+<!-- The consent dialog is the first window on a fresh install.
+     Keep shutdown explicit until the real MainWindow is ready. -->
 <Application x:Class="UnpackVision.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             ShutdownMode="OnMainWindowClose">
+             ShutdownMode="OnExplicitShutdown">
   <Application.Resources>
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    <!-- One embedded image source is shared by every branded window. Relative file
+         paths are intentionally avoided because packaged builds change directories. -->
+    <BitmapImage x:Key="AppBrandLogo"
+                 UriSource="pack://application:,,,/Assets/EcommerceUnpackRecorder-Logo.png"
+                 CacheOption="OnLoad" />
 
     <!-- UnpackVision light appearance: quiet surfaces, system blue accents. -->
     <Color x:Key="PrimaryColor">#0A7AFF</Color>

@@ -8,24 +8,50 @@ using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Net.Http.Headers;
+using UnpackVision.Application.Recording;
+using UnpackVision.Application.Scanning;
 using UnpackVision.Core;
 using UnpackVision.Infrastructure;
+using UnpackVision.Infrastructure.Diagnostics;
 using UnpackVision.StationHost;
+using static UnpackVision.StationHost.StationHostEndpointSupport;
 
-using var hostInstanceMutex = new Mutex(
-    true,
-    @"Local\UnpackVision.StationHost.SingleInstance",
-    out var isFirstHostInstance);
-if (!isFirstHostInstance)
+DiagnosticLog.Initialize("station-host", "2.3.2");
+DiagnosticLog.RegisterGlobalExceptionHandlers();
+DiagnosticLog.Information("工位主机正在启动");
+
+var allowTestInstance = string.Equals(
+    Environment.GetEnvironmentVariable("UNPACKVISION_ALLOW_TEST_INSTANCE"),
+    "1",
+    StringComparison.Ordinal);
+var isFirstHostInstance = true;
+using var hostInstanceMutex = allowTestInstance
+    ? null
+    : new Mutex(
+        true,
+        @"Local\UnpackVision.StationHost.SingleInstance",
+        out isFirstHostInstance);
+if (!allowTestInstance && !isFirstHostInstance)
 {
+    DiagnosticLog.Information("已有工位主机实例正在运行，本实例退出");
+    DiagnosticLog.CloseAndFlush();
     return;
 }
 
 var settingsStore = new LocalSettingsStore();
 var localSettings = await settingsStore.LoadAsync();
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.AddProvider(DiagnosticLog.CreateLoggerProvider());
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 var storageOptions = BindOptions<StorageOptions>(builder.Configuration, "Storage");
 var excelOptions = BindOptions<ExcelConnectorOptions>(builder.Configuration, "Excel");
+if (!allowTestInstance)
+{
+    // The desktop settings are authoritative in production. Isolated smoke
+    // hosts must use their explicit temporary paths and never touch user data.
+    storageOptions.RecordingRoot = localSettings.RecordingRoot;
+    excelOptions.WorkbookPath = localSettings.ExcelWorkbookPath;
+}
 var stationOptions = BindOptions<StationHostOptions>(builder.Configuration, "StationHost");
 var mediaRelayOptions = BindOptions<MediaRelayOptions>(builder.Configuration, "MediaRelay");
 if (string.IsNullOrWhiteSpace(stationOptions.StationId))
@@ -35,6 +61,9 @@ if (string.IsNullOrWhiteSpace(stationOptions.StationId))
 var lanAddresses = GetPrivateIpv4Addresses();
 stationOptions.LanHttpsEnabled =
     stationOptions.LanHttpsEnabled && lanAddresses.Length > 0;
+DiagnosticLog.Information(
+    "工位主机检测到 {LanAddressCount} 个专用网络地址，将分别绑定 5273 端口",
+    lanAddresses.Length);
 var certificateMaterial = StationCertificateStore.LoadOrCreate(
     stationOptions.StationId,
     lanAddresses,
@@ -53,7 +82,7 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = 4 * 1024 * 1024;
     options.Limits.RequestHeadersTimeout = TimeSpan.FromSeconds(10);
     options.Limits.KeepAliveTimeout = TimeSpan.FromSeconds(30);
-    options.ListenLocalhost(5271);
+    options.ListenLocalhost(stationOptions.LoopbackPort);
     if (stationOptions.LanHttpsEnabled)
     {
         foreach (var address in lanAddresses)
@@ -72,7 +101,11 @@ builder.Services.AddSingleton(stationOptions);
 builder.Services.AddSingleton(mediaRelayOptions);
 builder.Services.AddSingleton(localSettings);
 builder.Services.AddSingleton<IClock, SystemClock>();
-builder.Services.AddSingleton<IScanRecordRepository, SqliteScanRecordRepository>();
+builder.Services.AddSingleton<SqliteScanRecordRepository>();
+builder.Services.AddSingleton<IScanRecordRepository>(services =>
+    new PortableCatalogScanRecordRepository(
+        services.GetRequiredService<SqliteScanRecordRepository>(),
+        () => new PortableRecordCatalog(storageOptions.RecordingRoot)));
 builder.Services.AddSingleton<IPairedDeviceRegistry, SqlitePairedDeviceRegistry>();
 builder.Services.AddSingleton<IScanCommandLedger, SqliteScanCommandLedger>();
 builder.Services.AddSingleton<IMediaRelayManager, MediaRelayManager>();
@@ -127,6 +160,12 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 
 var app = builder.Build();
+var requestLogger = app.Services
+    .GetRequiredService<ILoggerFactory>()
+    .CreateLogger("UnpackVision.Requests");
+var pairingLogger = app.Services
+    .GetRequiredService<ILoggerFactory>()
+    .CreateLogger("UnpackVision.Pairing");
 var repository = app.Services.GetRequiredService<IScanRecordRepository>();
 await repository.InitializeAsync();
 var deviceRegistry = app.Services.GetRequiredService<IPairedDeviceRegistry>();
@@ -147,6 +186,37 @@ if (!string.Equals(
     await repository.SetMetadataAsync(securityGenerationKey, "2.2.0");
 }
 
+app.Use(async (context, next) =>
+{
+    var startedAt = Stopwatch.GetTimestamp();
+    try
+    {
+        await next();
+    }
+    catch (Exception exception)
+    {
+        requestLogger.LogError(
+            exception,
+            "HTTP 请求失败，端点 {EndpointTemplate}，方法 {HttpMethod}",
+            GetEndpointTemplate(context),
+            context.Request.Method);
+        throw;
+    }
+    finally
+    {
+        var elapsed = Stopwatch.GetElapsedTime(startedAt);
+        if (elapsed >= TimeSpan.FromSeconds(2) ||
+            context.Response.StatusCode >= StatusCodes.Status500InternalServerError)
+        {
+            requestLogger.LogWarning(
+                "HTTP 请求缓慢或失败，端点 {EndpointTemplate}，方法 {HttpMethod}，状态 {StatusCode}，耗时 {ElapsedMilliseconds} 毫秒",
+                GetEndpointTemplate(context),
+                context.Request.Method,
+                context.Response.StatusCode,
+                elapsed.TotalMilliseconds);
+        }
+    }
+});
 app.UseRateLimiter();
 app.Use(async (context, next) =>
 {
@@ -178,8 +248,12 @@ app.MapOpenApi();
 app.MapGet("/api/v1/health", () => Results.Ok(new
 {
     status = "healthy",
-    version = "2.2.0",
+    version = "2.3.2",
     tls = stationOptions.LanHttpsEnabled,
+    // The desktop compares this startup snapshot with current Windows network
+    // addresses. A mismatch means Wi-Fi, Ethernet or tethering changed and the
+    // host must restart before a pairing QR can safely advertise the new IP.
+    lanAddresses = lanAddresses.Select(address => address.ToString()).ToArray(),
     time = DateTimeOffset.Now
 }));
 app.MapPost("/internal/shutdown", (
@@ -415,7 +489,7 @@ app.MapPost("/api/v1/stations/{id}/scans", async Task<IResult> (
     {
         var acknowledgement = await desktopBridge.TryRouteAsync(command, cancellationToken);
         return acknowledgement is null
-            ? Results.Json(new { error = "电脑桌面端未就绪，请先打开电商拆包智能录像" }, statusCode: StatusCodes.Status503ServiceUnavailable)
+            ? Results.Json(new { error = "电脑桌面端未就绪，请先打开拆包智录" }, statusCode: StatusCodes.Status503ServiceUnavailable)
             : Results.Ok(acknowledgement);
     }
 
@@ -440,10 +514,12 @@ app.MapPost("/api/v1/pairing/sessions", (
         if (!IPAddress.TryParse(address, out var parsed) ||
             !lanAddresses.Contains(parsed))
         {
+            pairingLogger.LogWarning("拒绝为不属于当前专用网络的地址创建配对会话");
             return Results.BadRequest(new { error = "所选地址不是当前 Windows 专用网络地址" });
         }
         selectedAddress = new Uri($"https://{parsed}:{stationOptions.LanHttpsPort}");
     }
+    pairingLogger.LogInformation("已创建一次性配对会话");
     return Results.Ok(sessions.Create(requestAddress, selectedAddress));
 });
 
@@ -461,10 +537,12 @@ app.MapPost("/device/v1/pair", async Task<IResult> (
         request.Roles.Count > 10 ||
         request.Scopes.Count > 10)
     {
+        pairingLogger.LogWarning("手机提交的配对资料未通过长度或完整性检查");
         return Results.BadRequest(new { error = "配对资料为空或超过安全长度，请重新打开手机端后再试" });
     }
     if (!sessions.TryConsume(request.SessionId, request.Token, out _))
     {
+        pairingLogger.LogWarning("手机提交了无效、已使用或已过期的配对会话");
         return Results.Json(
             new { error = "配对二维码已过期、已使用或不属于当前工位主机，请在电脑端刷新二维码" },
             statusCode: StatusCodes.Status401Unauthorized);
@@ -487,7 +565,12 @@ app.MapPost("/device/v1/pair", async Task<IResult> (
         request.PublicKey,
         request.Roles.Where(allowedRoles.Contains).Distinct(StringComparer.Ordinal).ToArray(),
         request.Scopes.Where(allowedScopes.Contains).Distinct(StringComparer.Ordinal).ToArray());
-    return Results.Ok(await devices.PairAsync(registration, cancellationToken));
+    var pairedDevice = await devices.PairAsync(registration, cancellationToken);
+    pairingLogger.LogInformation(
+        "手机配对成功，角色数量 {RoleCount}，权限数量 {ScopeCount}",
+        registration.Roles.Count,
+        registration.Scopes.Count);
+    return Results.Ok(pairedDevice);
 }).RequireRateLimiting("pairing");
 
 app.MapGet("/api/v1/devices", async Task<IResult> (
@@ -648,278 +731,17 @@ app.MapPost("/internal/media/auth", async Task<IResult> (
     }
     return Results.Ok();
 });
-await app.RunAsync();
-
-static T BindOptions<T>(IConfiguration configuration, string sectionName) where T : new()
+try
 {
-    var value = configuration.GetSection(sectionName).Get<T>() ?? new T();
-    foreach (var property in typeof(T).GetProperties().Where(property => property.PropertyType == typeof(string)))
-    {
-        if (property.GetValue(value) is string text)
-        {
-            property.SetValue(value, Environment.ExpandEnvironmentVariables(text));
-        }
-    }
-    return value;
+    await app.RunAsync();
+}
+finally
+{
+    DiagnosticLog.Information("工位主机正在停止");
+    DiagnosticLog.CloseAndFlush();
 }
 
-static IPAddress[] GetPrivateIpv4Addresses()
-{
-    var privateInterfaceIndexes = GetPrivateNetworkInterfaceIndexes();
-    if (privateInterfaceIndexes.Count == 0)
-    {
-        return [];
-    }
-    return [.. NetworkInterface.GetAllNetworkInterfaces()
-        .Where(item => item.OperationalStatus == OperationalStatus.Up)
-        .Where(item => item.NetworkInterfaceType is not NetworkInterfaceType.Loopback and not NetworkInterfaceType.Tunnel)
-        .Where(item =>
-        {
-            try
-            {
-                return privateInterfaceIndexes.Contains(
-                    item.GetIPProperties().GetIPv4Properties()?.Index ?? -1);
-            }
-            catch (NetworkInformationException)
-            {
-                return false;
-            }
-        })
-        .SelectMany(item => item.GetIPProperties().UnicastAddresses)
-        .Select(item => item.Address)
-        .Where(address => address.AddressFamily == AddressFamily.InterNetwork && IsPrivateIpv4(address))
-        .Distinct()
-        .OrderBy(address => address.ToString())];
-}
-
-static HashSet<int> GetPrivateNetworkInterfaceIndexes()
-{
-    try
-    {
-        var powershell = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.System),
-            @"WindowsPowerShell\v1.0\powershell.exe");
-        if (!File.Exists(powershell))
-        {
-            return [];
-        }
-        using var process = Process.Start(new ProcessStartInfo
-        {
-            FileName = powershell,
-            Arguments =
-                "-NoProfile -NonInteractive -Command " +
-                "\"Get-NetConnectionProfile | Where-Object NetworkCategory -eq 'Private' | " +
-                "Select-Object -ExpandProperty InterfaceIndex\"",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-            WindowStyle = ProcessWindowStyle.Hidden
-        });
-        if (process is null || !process.WaitForExit(3000))
-        {
-            try { process?.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-            return [];
-        }
-        return process.StandardOutput.ReadToEnd()
-            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(value => int.TryParse(value, out var index) ? index : -1)
-            .Where(index => index >= 0)
-            .ToHashSet();
-    }
-    catch (Exception exception) when (
-        exception is InvalidOperationException or System.ComponentModel.Win32Exception)
-    {
-        return [];
-    }
-}
-
-static bool IsPrivateIpv4(IPAddress address)
-{
-    var bytes = address.GetAddressBytes();
-    return bytes[0] == 10 ||
-           bytes[0] == 192 && bytes[1] == 168 ||
-           bytes[0] == 172 && bytes[1] is >= 16 and <= 31;
-}
-
-static string GetAdvertisedHost(StationHostOptions options)
-{
-    if (!Uri.TryCreate(options.AdvertisedAddress, UriKind.Absolute, out var address) ||
-        string.IsNullOrWhiteSpace(address.Host))
-    {
-        throw new InvalidOperationException("工位没有可用的局域网安全地址");
-    }
-    return address.Host;
-}
-
-static bool IsPathUnderRoot(string path, string root)
-{
-    try
-    {
-        var fullRoot = Path.GetFullPath(root)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
-            Path.DirectorySeparatorChar;
-        var fullPath = Path.GetFullPath(path);
-        return fullPath.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase);
-    }
-    catch (Exception exception) when (
-        exception is ArgumentException or NotSupportedException or PathTooLongException)
-    {
-        return false;
-    }
-}
-
-static bool IsLoopback(HttpContext context) =>
-    context.Connection.RemoteIpAddress is { } address && System.Net.IPAddress.IsLoopback(address);
-
-static (string DeviceId, string AccessToken)? ReadDeviceAuthorization(HttpRequest request)
-{
-    var deviceId = request.Headers["X-UnpackVision-Device"].ToString().Trim();
-    var authorization = request.Headers.Authorization.ToString();
-    const string prefix = "Bearer ";
-    if (string.IsNullOrWhiteSpace(deviceId) || !authorization.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-    {
-        return null;
-    }
-    var token = authorization[prefix.Length..].Trim();
-    return string.IsNullOrWhiteSpace(token) ? null : (deviceId, token);
-}
-
-static async Task<bool> AuthorizeAsync(
-    HttpContext context,
-    IPairedDeviceRegistry devices,
-    string scope,
-    CancellationToken cancellationToken)
-{
-    if (IsLoopback(context))
-    {
-        return true;
-    }
-    var authorization = ReadDeviceAuthorization(context.Request);
-    return authorization is not null && await devices.AuthenticateAsync(
-        authorization.Value.DeviceId,
-        authorization.Value.AccessToken,
-        scope,
-        cancellationToken) is not null;
-}
-
-static async Task<bool> RemovePairedDeviceAsync(
-    string deviceId,
-    IPairedDeviceRegistry devices,
-    IMediaRelayManager mediaRelay,
-    IClock clock,
-    CancellationToken cancellationToken)
-{
-    if (!await devices.RevokeAsync(deviceId, clock.Now, cancellationToken))
-    {
-        return false;
-    }
-    await mediaRelay.DisconnectDeviceAsync(deviceId, cancellationToken);
-    return await devices.DeleteAsync(deviceId, cancellationToken);
-}
-
-static StationRecordView ToStationRecordView(ScanRecord record)
-{
-    var hasVideo = record.VideoPath is { Length: > 0 } && File.Exists(record.VideoPath);
-    long? videoBytes = hasVideo ? new FileInfo(record.VideoPath!).Length : null;
-    double? duration = record.RecordingStartedAt is { } started && record.RecordingEndedAt is { } ended
-        ? Math.Max(0, (ended - started).TotalSeconds)
-        : null;
-    return new StationRecordView(
-        record.Id,
-        record.TrackingNo,
-        record.Workflow,
-        record.State,
-        record.ScannedAt,
-        record.RecordingStartedAt,
-        record.RecordingEndedAt,
-        duration,
-        record.Note,
-        record.Tags,
-        record.CameraId,
-        record.StationId,
-        record.DuplicateOf,
-        record.PlatformMatchStatus,
-        record.FailureReason,
-        hasVideo,
-        videoBytes,
-        record.Snapshots.Any(File.Exists),
-        record.UpdatedAt);
-}
-
-static IReadOnlyList<StationRecordEvent> BuildRecordEvents(
-    ScanRecord record,
-    IReadOnlyList<RecordTagAssignment> tags)
-{
-    var events = new List<StationRecordEvent>
-    {
-        new("record.scanned", record.ScannedAt, $"扫描单号 {record.TrackingNo}")
-    };
-    if (record.RecordingStartedAt is { } started)
-    {
-        events.Add(new("record.started", started, "开始录像"));
-    }
-    if (record.RecordingEndedAt is { } ended)
-    {
-        events.Add(new("record.completed", ended, record.State == RecordingState.Failed ? "录像失败" : "录像结束"));
-    }
-    foreach (var tag in tags)
-    {
-        events.Add(new("record.tagged", tag.TaggedAt, $"标记异常：{tag.TagName}", tag.TagId, tag.Id));
-        if (tag.RemovedAt is { } removedAt)
-        {
-            events.Add(new("record.tag_removed", removedAt, $"撤销异常：{tag.TagName}", tag.TagId, tag.Id));
-        }
-    }
-    if (record.NoteUpdatedAt is { } noteUpdatedAt)
-    {
-        events.Add(new("record.note_updated", noteUpdatedAt, "备注已更新"));
-    }
-    if (!string.IsNullOrWhiteSpace(record.FailureReason))
-    {
-        events.Add(new("record.failed", record.UpdatedAt, record.FailureReason));
-    }
-    return events.OrderBy(item => item.At).ToArray();
-}
-
-static bool TryDecodeCursor(string? cursor, out int offset)
-{
-    offset = 0;
-    if (string.IsNullOrWhiteSpace(cursor))
-    {
-        return true;
-    }
-    try
-    {
-        var normalized = cursor.Replace('-', '+').Replace('_', '/');
-        normalized = normalized.PadRight(normalized.Length + (4 - normalized.Length % 4) % 4, '=');
-        var text = Encoding.UTF8.GetString(Convert.FromBase64String(normalized));
-        return int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out offset) && offset >= 0;
-    }
-    catch (FormatException)
-    {
-        return false;
-    }
-}
-
-static string EncodeCursor(int offset) => Convert.ToBase64String(
-        Encoding.UTF8.GetBytes(offset.ToString(CultureInfo.InvariantCulture)))
-    .TrimEnd('=')
-    .Replace('+', '-')
-    .Replace('/', '_');
-
-static string GetVideoContentType(string extension) => extension.ToLowerInvariant() switch
-{
-    ".webm" => "video/webm",
-    ".mov" => "video/quicktime",
-    ".avi" => "video/x-msvideo",
-    _ => "video/mp4"
-};
-
-static string GetImageContentType(string extension) => extension.ToLowerInvariant() switch
-{
-    ".png" => "image/png",
-    ".webp" => "image/webp",
-    ".bmp" => "image/bmp",
-    _ => "image/jpeg"
-};
+static string GetEndpointTemplate(HttpContext context) =>
+    context.GetEndpoint() is RouteEndpoint routeEndpoint
+        ? routeEndpoint.RoutePattern.RawText ?? "unknown"
+        : "unmatched";

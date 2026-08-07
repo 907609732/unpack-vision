@@ -136,6 +136,40 @@ public sealed class StationScanCommandRouterTests : IDisposable
         Assert.Empty(backend.OverlayTags);
     }
 
+    [Theory]
+    [InlineData(IssueTagDefaults.MissingBarcode, IssueTagDefaults.MissingTagId, "少件")]
+    [InlineData(IssueTagDefaults.PurchaseBarcode, IssueTagDefaults.PurchaseTagId, "采购")]
+    public async Task IssueRemoteCanApplyNewDefaultTags(
+        string barcode,
+        string expectedTagId,
+        string expectedName)
+    {
+        var repository = new InMemoryRepository();
+        var backend = new FakeRecordingBackend(_temp);
+        var profile = new ScannerProfile();
+        var clock = new FakeClock(DateTimeOffset.Now);
+        var coordinator = new RecordingCoordinator(repository, backend, new NullEventPublisher(), clock, profile);
+        var router = new StationScanCommandRouter(coordinator, repository, clock, profile);
+        await router.RouteAsync(new ScanCommand
+        {
+            DeviceId = "phone-a",
+            Value = "SF1234567890",
+            Mode = DeviceOperatingMode.HandheldScanner
+        });
+
+        var acknowledgement = await router.RouteAsync(new ScanCommand
+        {
+            DeviceId = "phone-a",
+            Value = barcode,
+            Mode = DeviceOperatingMode.IssueRemote
+        });
+
+        Assert.Equal(ScanCommandAction.IssueTagged, acknowledgement.Action);
+        var tag = Assert.Single(repository.Records[0].Tags);
+        Assert.Equal(expectedTagId, tag.TagId);
+        Assert.Equal(expectedName, tag.TagName);
+    }
+
     [Fact]
     public async Task IssueRemoteCanSaveNoteAndStopRecording()
     {

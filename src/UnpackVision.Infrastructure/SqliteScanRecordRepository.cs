@@ -1,6 +1,6 @@
-using System.Globalization;
 using Microsoft.Data.Sqlite;
 using UnpackVision.Core;
+using static UnpackVision.Infrastructure.SqliteRecordMapping;
 
 namespace UnpackVision.Infrastructure;
 
@@ -176,6 +176,77 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
         {
             throw new InvalidOperationException($"扫描记录 {record.Id} 不存在");
         }
+    }
+
+    public async Task<bool> MergeRecoveredAsync(
+        ScanRecord record,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = await OpenAsync(cancellationToken);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO scan_records (
+                id, tracking_no, workflow, state, scanned_at,
+                recording_started_at, recording_ended_at, video_path,
+                snapshots_json, camera_id, station_id, duplicate_of,
+                platform_match_status, note, note_updated_at, failure_reason,
+                created_at, updated_at, deleted_at)
+            VALUES (
+                $id, $trackingNo, $workflow, $state, $scannedAt,
+                $recordingStartedAt, $recordingEndedAt, $videoPath,
+                $snapshotsJson, $cameraId, $stationId, $duplicateOf,
+                $platformMatchStatus, $note, $noteUpdatedAt, $failureReason,
+                $createdAt, $updatedAt, NULL)
+            ON CONFLICT(id) DO UPDATE SET
+                tracking_no=excluded.tracking_no,
+                workflow=excluded.workflow,
+                state=excluded.state,
+                scanned_at=excluded.scanned_at,
+                recording_started_at=excluded.recording_started_at,
+                recording_ended_at=excluded.recording_ended_at,
+                video_path=excluded.video_path,
+                snapshots_json=excluded.snapshots_json,
+                camera_id=excluded.camera_id,
+                station_id=excluded.station_id,
+                duplicate_of=excluded.duplicate_of,
+                platform_match_status=excluded.platform_match_status,
+                note=CASE
+                    WHEN excluded.note_updated_at IS NOT NULL AND
+                         (scan_records.note_updated_at IS NULL OR excluded.note_updated_at >= scan_records.note_updated_at)
+                    THEN excluded.note ELSE scan_records.note END,
+                note_updated_at=CASE
+                    WHEN excluded.note_updated_at IS NOT NULL AND
+                         (scan_records.note_updated_at IS NULL OR excluded.note_updated_at >= scan_records.note_updated_at)
+                    THEN excluded.note_updated_at ELSE scan_records.note_updated_at END,
+                failure_reason=excluded.failure_reason,
+                created_at=MIN(scan_records.created_at, excluded.created_at),
+                updated_at=MAX(scan_records.updated_at, excluded.updated_at),
+                deleted_at=NULL
+            WHERE excluded.updated_at >= scan_records.updated_at
+               OR (excluded.note_updated_at IS NOT NULL AND
+                   (scan_records.note_updated_at IS NULL OR excluded.note_updated_at >= scan_records.note_updated_at));
+            """;
+        BindRecord(command, record);
+        var changed = await command.ExecuteNonQueryAsync(cancellationToken) > 0;
+
+        foreach (var tag in record.Tags)
+        {
+            await using var tagCommand = connection.CreateCommand();
+            tagCommand.Transaction = transaction;
+            tagCommand.CommandText = """
+                INSERT OR REPLACE INTO record_tags(
+                    id, record_id, tag_id, tag_name, color_hex, tagged_at, removed_at, source)
+                VALUES($id, $recordId, $tagId, $tagName, $colorHex, $taggedAt, $removedAt, $source);
+                """;
+            BindTag(tagCommand, tag);
+            tagCommand.Parameters.AddWithValue("$removedAt", Db(tag.RemovedAt));
+            await tagCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return changed;
     }
 
     private static SqliteCommand CreateUpdateCommand(
@@ -538,6 +609,44 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
         return await reader.ReadAsync(cancellationToken) ? ReadDelivery(reader) : null;
     }
 
+    public async Task<IReadOnlyDictionary<Guid, SyncDelivery>> GetLatestDeliveriesAsync(
+        IReadOnlyCollection<Guid> recordIds,
+        string connectorId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(connectorId);
+        var ids = recordIds.Distinct().ToArray();
+        if (ids.Length == 0)
+        {
+            return new Dictionary<Guid, SyncDelivery>();
+        }
+
+        await using var connection = await OpenAsync(cancellationToken);
+        var command = connection.CreateCommand();
+        var parameterNames = new string[ids.Length];
+        for (var index = 0; index < ids.Length; index++)
+        {
+            parameterNames[index] = $"$record{index}";
+            command.Parameters.AddWithValue(parameterNames[index], ids[index].ToString("D"));
+        }
+        command.Parameters.AddWithValue("$connectorId", connectorId);
+        command.CommandText = $"""
+            SELECT * FROM sync_deliveries
+            WHERE connector_id=$connectorId
+              AND record_id IN ({string.Join(", ", parameterNames)})
+            ORDER BY created_at DESC, id DESC;
+            """;
+
+        var deliveries = new Dictionary<Guid, SyncDelivery>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var delivery = ReadDelivery(reader);
+            deliveries.TryAdd(delivery.RecordId, delivery);
+        }
+        return deliveries;
+    }
+
     public async Task<bool> TryClaimDeliveryAsync(Guid deliveryId, CancellationToken cancellationToken = default)
     {
         await using var connection = await OpenAsync(cancellationToken);
@@ -778,112 +887,4 @@ public sealed class SqliteScanRecordRepository : IScanRecordRepository
         return tags;
     }
 
-    private static void BindTag(SqliteCommand command, RecordTagAssignment tag)
-    {
-        command.Parameters.AddWithValue("$id", tag.Id.ToString("D"));
-        command.Parameters.AddWithValue("$recordId", tag.RecordId.ToString("D"));
-        command.Parameters.AddWithValue("$tagId", tag.TagId);
-        command.Parameters.AddWithValue("$tagName", tag.TagName);
-        command.Parameters.AddWithValue("$colorHex", tag.ColorHex);
-        command.Parameters.AddWithValue("$taggedAt", Format(tag.TaggedAt));
-        command.Parameters.AddWithValue("$source", tag.Source);
-    }
-
-    private static void AddIdParameters(SqliteCommand command, IReadOnlyList<Guid> ids)
-    {
-        for (var index = 0; index < ids.Count; index++)
-        {
-            command.Parameters.AddWithValue($"$id{index}", ids[index].ToString("D"));
-        }
-    }
-
-    private static void BindRecord(SqliteCommand command, ScanRecord record)
-    {
-        command.Parameters.AddWithValue("$id", record.Id.ToString("D"));
-        command.Parameters.AddWithValue("$trackingNo", record.TrackingNo);
-        command.Parameters.AddWithValue("$workflow", record.Workflow.ToString());
-        command.Parameters.AddWithValue("$state", record.State.ToString());
-        command.Parameters.AddWithValue("$scannedAt", Format(record.ScannedAt));
-        command.Parameters.AddWithValue("$recordingStartedAt", Db(record.RecordingStartedAt));
-        command.Parameters.AddWithValue("$recordingEndedAt", Db(record.RecordingEndedAt));
-        command.Parameters.AddWithValue("$videoPath", Db(record.VideoPath is null ? null : Path.GetFullPath(record.VideoPath)));
-        command.Parameters.AddWithValue("$snapshotsJson", record.SnapshotsJson);
-        command.Parameters.AddWithValue("$cameraId", Db(record.CameraId));
-        command.Parameters.AddWithValue("$stationId", record.StationId);
-        command.Parameters.AddWithValue("$duplicateOf", Db(record.DuplicateOf?.ToString("D")));
-        command.Parameters.AddWithValue("$platformMatchStatus", record.PlatformMatchStatus);
-        command.Parameters.AddWithValue("$note", record.Note ?? string.Empty);
-        command.Parameters.AddWithValue("$noteUpdatedAt", Db(record.NoteUpdatedAt));
-        command.Parameters.AddWithValue("$failureReason", Db(record.FailureReason));
-        command.Parameters.AddWithValue("$createdAt", Format(record.CreatedAt));
-        command.Parameters.AddWithValue("$updatedAt", Format(record.UpdatedAt));
-    }
-
-    private static ScanRecord ReadRecord(SqliteDataReader reader) => new()
-    {
-        Id = Guid.Parse(reader.GetString(reader.GetOrdinal("id"))),
-        TrackingNo = reader.GetString(reader.GetOrdinal("tracking_no")),
-        Workflow = Enum.Parse<WorkflowMode>(reader.GetString(reader.GetOrdinal("workflow"))),
-        State = Enum.Parse<RecordingState>(reader.GetString(reader.GetOrdinal("state"))),
-        ScannedAt = Parse(reader.GetString(reader.GetOrdinal("scanned_at"))),
-        RecordingStartedAt = ReadDate(reader, "recording_started_at"),
-        RecordingEndedAt = ReadDate(reader, "recording_ended_at"),
-        VideoPath = ReadString(reader, "video_path"),
-        SnapshotsJson = reader.GetString(reader.GetOrdinal("snapshots_json")),
-        CameraId = ReadString(reader, "camera_id"),
-        StationId = reader.GetString(reader.GetOrdinal("station_id")),
-        DuplicateOf = ReadGuid(reader, "duplicate_of"),
-        PlatformMatchStatus = reader.GetString(reader.GetOrdinal("platform_match_status")),
-        Note = reader.GetString(reader.GetOrdinal("note")),
-        NoteUpdatedAt = ReadDate(reader, "note_updated_at"),
-        FailureReason = ReadString(reader, "failure_reason"),
-        CreatedAt = Parse(reader.GetString(reader.GetOrdinal("created_at"))),
-        UpdatedAt = Parse(reader.GetString(reader.GetOrdinal("updated_at")))
-    };
-
-    private static RecordTagAssignment ReadTag(SqliteDataReader reader) => new()
-    {
-        Id = Guid.Parse(reader.GetString(reader.GetOrdinal("id"))),
-        RecordId = Guid.Parse(reader.GetString(reader.GetOrdinal("record_id"))),
-        TagId = reader.GetString(reader.GetOrdinal("tag_id")),
-        TagName = reader.GetString(reader.GetOrdinal("tag_name")),
-        ColorHex = reader.GetString(reader.GetOrdinal("color_hex")),
-        TaggedAt = Parse(reader.GetString(reader.GetOrdinal("tagged_at"))),
-        RemovedAt = ReadDate(reader, "removed_at"),
-        Source = reader.GetString(reader.GetOrdinal("source"))
-    };
-
-    private static SyncDelivery ReadDelivery(SqliteDataReader reader) => new()
-    {
-        Id = Guid.Parse(reader.GetString(reader.GetOrdinal("id"))),
-        RecordId = Guid.Parse(reader.GetString(reader.GetOrdinal("record_id"))),
-        ConnectorId = reader.GetString(reader.GetOrdinal("connector_id")),
-        Status = Enum.Parse<SyncStatus>(reader.GetString(reader.GetOrdinal("status"))),
-        AttemptCount = reader.GetInt32(reader.GetOrdinal("attempt_count")),
-        ExternalId = ReadString(reader, "external_id"),
-        LastError = ReadString(reader, "last_error"),
-        NextRetryAt = Parse(reader.GetString(reader.GetOrdinal("next_retry_at"))),
-        CreatedAt = Parse(reader.GetString(reader.GetOrdinal("created_at"))),
-        UpdatedAt = Parse(reader.GetString(reader.GetOrdinal("updated_at")))
-    };
-
-    private static object Db(string? value) => (object?)value ?? DBNull.Value;
-    private static object Db(DateTimeOffset? value) => value is null ? DBNull.Value : Format(value.Value);
-    private static string Format(DateTimeOffset value) => value.ToString("O", CultureInfo.InvariantCulture);
-    private static DateTimeOffset Parse(string value) => DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
-    private static string? ReadString(SqliteDataReader reader, string name)
-    {
-        var ordinal = reader.GetOrdinal(name);
-        return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
-    }
-    private static DateTimeOffset? ReadDate(SqliteDataReader reader, string name)
-    {
-        var value = ReadString(reader, name);
-        return value is null ? null : Parse(value);
-    }
-    private static Guid? ReadGuid(SqliteDataReader reader, string name)
-    {
-        var value = ReadString(reader, name);
-        return value is null ? null : Guid.Parse(value);
-    }
 }

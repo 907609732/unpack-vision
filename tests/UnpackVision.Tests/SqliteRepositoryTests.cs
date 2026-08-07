@@ -30,8 +30,12 @@ public sealed class SqliteRepositoryTests : IDisposable
 
         var loaded = await repository.GetAsync(record.Id);
         var delivery = Assert.Single(await repository.GetDueDeliveriesAsync(10, now.AddMinutes(1)));
+        var deliveries = await repository.GetLatestDeliveriesAsync(
+            [record.Id, Guid.NewGuid()],
+            "excel");
 
         Assert.Equal("00123-ABC", loaded?.TrackingNo);
+        Assert.Equal(delivery.Id, Assert.Single(deliveries).Value.Id);
         Assert.True(await repository.TryClaimDeliveryAsync(delivery.Id));
         Assert.False(await repository.TryClaimDeliveryAsync(delivery.Id));
     }
@@ -148,6 +152,39 @@ public sealed class SqliteRepositoryTests : IDisposable
         Assert.Equal(["YT-004", "YT-003"], firstPage.Select(item => item.TrackingNo));
         Assert.Equal(["SF-MATCH-002", "YT-001"], secondPage.Select(item => item.TrackingNo));
         Assert.Equal("SF-MATCH-002", Assert.Single(filtered).TrackingNo);
+    }
+
+    [Fact]
+    public async Task LatestDeliveriesLoadsHistoryStatusInOneBatch()
+    {
+        var repository = new SqliteScanRecordRepository(new StorageOptions
+        {
+            DatabasePath = Path.Combine(_root, "delivery-batch.db")
+        });
+        await repository.InitializeAsync();
+        var now = DateTimeOffset.Now;
+        var records = Enumerable.Range(0, 120)
+            .Select(index => new ScanRecord
+            {
+                TrackingNo = $"BATCH-{index:000}",
+                State = RecordingState.Completed,
+                ScannedAt = now.AddSeconds(index),
+                CreatedAt = now.AddSeconds(index),
+                UpdatedAt = now.AddSeconds(index)
+            })
+            .ToArray();
+        foreach (var record in records)
+        {
+            await repository.AddAsync(record);
+            await repository.EnqueueDeliveryAsync(record.Id, "excel");
+        }
+
+        var deliveries = await repository.GetLatestDeliveriesAsync(
+            records.Select(record => record.Id).ToArray(),
+            "excel");
+
+        Assert.Equal(records.Length, deliveries.Count);
+        Assert.All(records, record => Assert.Equal(record.Id, deliveries[record.Id].RecordId));
     }
 
     public void Dispose()

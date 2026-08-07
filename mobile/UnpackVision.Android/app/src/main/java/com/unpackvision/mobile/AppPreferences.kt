@@ -26,17 +26,17 @@ class AppPreferences(context: Context) {
             preferences.getString(KEY_PRIVACY_VERSION, null) == CURRENT_PRIVACY_VERSION &&
             preferences.getLong(KEY_CONSENT_ACCEPTED_AT, 0L) > 0L
 
-    fun acceptCurrentLegalDocuments() {
+    fun acceptCurrentLegalDocuments(telemetryEnabled: Boolean = true) {
         preferences.edit()
             .putString(KEY_TERMS_VERSION, CURRENT_TERMS_VERSION)
             .putString(KEY_PRIVACY_VERSION, CURRENT_PRIVACY_VERSION)
             .putLong(KEY_CONSENT_ACCEPTED_AT, System.currentTimeMillis())
-            .putBoolean(KEY_OPTIONAL_USAGE_TELEMETRY, false)
+            .putBoolean(KEY_OPTIONAL_USAGE_TELEMETRY, telemetryEnabled)
             .apply()
     }
 
     var optionalUsageTelemetryEnabled: Boolean
-        get() = preferences.getBoolean(KEY_OPTIONAL_USAGE_TELEMETRY, false)
+        get() = preferences.getBoolean(KEY_OPTIONAL_USAGE_TELEMETRY, true)
         set(value) {
             preferences.edit()
                 .putBoolean(KEY_OPTIONAL_USAGE_TELEMETRY, value)
@@ -71,8 +71,8 @@ class AppPreferences(context: Context) {
         const val KEY_CONSENT_ACCEPTED_AT = "consent_accepted_at"
         const val KEY_OPTIONAL_USAGE_TELEMETRY = "optional_usage_telemetry"
         const val KEY_TELEMETRY_WITHDRAWN_AT = "telemetry_withdrawn_at"
-        const val CURRENT_TERMS_VERSION = "2026-07-29"
-        const val CURRENT_PRIVACY_VERSION = "2026-07-29"
+        const val CURRENT_TERMS_VERSION = "2026-07-29-2.3"
+        const val CURRENT_PRIVACY_VERSION = "2026-07-29-2.3"
     }
 }
 

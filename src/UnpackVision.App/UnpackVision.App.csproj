@@ -4,18 +4,26 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <AssemblyName>电商拆包智能录像</AssemblyName>
+    <AssemblyName>拆包智录</AssemblyName>
     <RootNamespace>UnpackVision.App</RootNamespace>
     <ApplicationIcon>Assets\EcommerceUnpackRecorder.ico</ApplicationIcon>
-    <Product>电商拆包智能录像</Product>
+    <Product>拆包智录</Product>
     <Description>电商拆包录像、手机协同与数据同步</Description>
-    <Version>2.2.0</Version>
+    <Version>2.3.2</Version>
     <StartupObject>UnpackVision.App.Program</StartupObject>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../UnpackVision.Application/UnpackVision.Application.csproj" />
     <ProjectReference Include="../UnpackVision.Core/UnpackVision.Core.csproj" />
     <ProjectReference Include="../UnpackVision.Infrastructure/UnpackVision.Infrastructure.csproj" />
     <PackageReference Include="System.Speech" Version="10.0.10" />
     <PackageReference Include="Velopack" Version="1.2.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- WPF resources are embedded in the assembly, so branding still works after
+         Velopack switches the current version directory during an upgrade. -->
+    <Resource Include="Assets\EcommerceUnpackRecorder-Logo.png" />
+    <Content Include="Assets\telemetry-endpoint.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\Donation\*.jpg" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

@@ -32,7 +32,16 @@ TestResults/
 **/build/
 **/local.properties
 **/.idea/
+**/node_modules/
+**/dist/
+**/.next/
+**/.wrangler/
 *.jks
 *.keystore
 *.pem
 tools/mediamtx/
+telemetry/wrangler.toml
+telemetry/wrangler.admin.toml
+telemetry/.wrangler/
+telemetry/.dev.vars*
+/website/

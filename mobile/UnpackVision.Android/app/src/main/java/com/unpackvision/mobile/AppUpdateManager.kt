@@ -108,7 +108,7 @@ class AppUpdateManager(private val context: Context) {
     ): File = withContext(Dispatchers.IO) {
         val manager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val request = DownloadManager.Request(Uri.parse(manifest.apkUrl))
-            .setTitle("电商拆包智能录像 ${manifest.versionName}")
+            .setTitle("拆包智录 ${manifest.versionName}")
             .setDescription("正在下载手机端更新")
             .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             .setAllowedOverMetered(true)

@@ -14,7 +14,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -51,13 +50,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -67,14 +65,15 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
-import java.security.MessageDigest
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 enum class WorkMode(val title: String, val subtitle: String, val contractName: String) {
     SmartCamera("智能摄像头", "把手机作为电脑摄像头，并自动识别快递单号", "SmartCamera"),
     HandheldScanner("手机扫码器", "全屏扫码，可选择是否同时启动电脑录像", "HandheldScanner"),
     ScanCollection("仅收集单号", "不录像，可靠追加到 Excel 队列", "ScanCollection"),
-    IssueRemote("异常遥控", "破损、调包、备注、截图和停止", "IssueRemote")
+    IssueRemote("异常遥控", "破损、调包、少件、采购、备注、截图和停止", "IssueRemote")
 }
 
 private enum class ComputerConnectionState {
@@ -97,10 +96,11 @@ class MainActivity : ComponentActivity() {
 private fun UnpackVisionApp() {
     val context = LocalContext.current
     val appPreferences = remember { AppPreferences(context) }
+    val usageTelemetry = remember { AndroidDailyUsageTelemetry(context) }
     var consentAccepted by remember { mutableStateOf(appPreferences.hasCurrentConsent) }
     if (!consentAccepted) {
-        ConsentWorkspace {
-            appPreferences.acceptCurrentLegalDocuments()
+        ConsentWorkspace { telemetryEnabled ->
+            appPreferences.acceptCurrentLegalDocuments(telemetryEnabled)
             UpdateCheckWorker.schedule(context)
             consentAccepted = true
         }
@@ -108,6 +108,9 @@ private fun UnpackVisionApp() {
     }
     LaunchedEffect(Unit) {
         UpdateCheckWorker.schedule(context)
+        withContext(Dispatchers.IO) {
+            usageTelemetry.trackIfEnabled(appPreferences)
+        }
     }
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -187,9 +190,17 @@ private fun UnpackVisionApp() {
         settingsOpen -> SettingsWorkspace(
             credential = credential,
             mainCameraOnly = mainCameraOnly,
+            telemetryEnabled = appPreferences.optionalUsageTelemetryEnabled,
             onMainCameraOnlyChanged = {
                 mainCameraOnly = it
                 appPreferences.mainCameraOnly = it
+            },
+            onTelemetryChanged = {
+                appPreferences.optionalUsageTelemetryEnabled = it
+                scope.launch(Dispatchers.IO) {
+                    if (it) usageTelemetry.trackIfEnabled(appPreferences)
+                    else usageTelemetry.deleteIdentity()
+                }
             },
             onBack = { settingsOpen = false },
             onPair = { pairingOpen = true; settingsOpen = false },
@@ -242,7 +253,7 @@ private fun HomeWorkspace(
     ) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("电商拆包智能录像", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
+                Text("拆包智录", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
                 Text("安卓协同端 · ${BuildConfig.VERSION_NAME}", color = Color(0xFF6E6E73))
             }
             OutlinedButton(onClick = onSettings) { Text("设置") }
@@ -283,8 +294,9 @@ private fun HomeWorkspace(
 }
 
 @Composable
-private fun ConsentWorkspace(onAccepted: () -> Unit) {
+private fun ConsentWorkspace(onAccepted: (Boolean) -> Unit) {
     var requiredAccepted by remember { mutableStateOf(false) }
+    var telemetryEnabled by remember { mutableStateOf(true) }
     var openedDocument by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     openedDocument?.let { document ->
@@ -304,7 +316,7 @@ private fun ConsentWorkspace(onAccepted: () -> Unit) {
     ) {
         Spacer(Modifier.height(12.dp))
         Text("欢迎使用", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.SemiBold)
-        Text("电商拆包智能录像", style = MaterialTheme.typography.titleLarge, color = Color(0xFF3478F6))
+        Text("拆包智录", style = MaterialTheme.typography.titleLarge, color = Color(0xFF3478F6))
         Card(colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("请先了解本地数据处理方式", fontWeight = FontWeight.SemiBold)
@@ -337,14 +349,22 @@ private fun ConsentWorkspace(onAccepted: () -> Unit) {
                 Text("我已阅读并同意《用户协议》和《隐私政策》", modifier = Modifier.weight(1f))
             }
         }
-        Text(
-            "2.2.0 不启用匿名统计，也不会生成稳定安装标识。今后如增加可选统计，将另行征得同意。",
-            color = Color(0xFF6E6E73),
-            style = MaterialTheme.typography.bodySmall
-        )
+        Card(colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = telemetryEnabled, onCheckedChange = { telemetryEnabled = it })
+                Column(Modifier.weight(1f)) {
+                    Text("帮助作者统计匿名日活（可选）", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "每天最多发送一次不可跨日关联的匿名值、Android 和软件版本；不发送任何业务数据。",
+                        color = Color(0xFF6E6E73),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
         Spacer(Modifier.weight(1f))
         Button(
-            onClick = onAccepted,
+            onClick = { onAccepted(telemetryEnabled) },
             enabled = requiredAccepted,
             modifier = Modifier.fillMaxWidth()
         ) { Text("同意并进入应用") }
@@ -352,131 +372,12 @@ private fun ConsentWorkspace(onAccepted: () -> Unit) {
 }
 
 @Composable
-private fun LegalWorkspace(title: String, body: String, onBack: () -> Unit) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF4F6FA))
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(20.dp)
-    ) {
-        FeatureHeader(onBack, title, "版本 2026-07-29")
-        Spacer(Modifier.height(16.dp))
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            modifier = Modifier.fillMaxSize()
-        ) {
-            Text(
-                body.trimIndent(),
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(18.dp),
-                color = Color(0xFF3A3A3C)
-            )
-        }
-    }
-}
-
-@Composable
-private fun DonationWorkspace(onBack: () -> Unit) {
-    val profile = remember { MobileDonationProfile() }
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(Color(0xFFF4F6FA))
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        FeatureHeader(onBack, "支持作者", "自愿赞助，不影响任何软件功能")
-        InfoCard("开发者", profile.developerName)
-        DonationQrCard("支付宝", profile.alipayDrawableName, profile.alipaySha256)
-        DonationQrCard("微信", profile.weChatDrawableName, profile.weChatSha256)
-        Text(
-            "付款完全由支付宝或微信处理。本软件不接入支付 SDK，不读取付款金额、账号、订单或付款结果。",
-            color = Color(0xFF6E6E73)
-        )
-    }
-}
-
-@Composable
-private fun DonationQrCard(channel: String, drawableName: String, expectedSha256: String) {
-    val context = LocalContext.current
-    val drawableId = remember(drawableName, expectedSha256) {
-        validateDonationDrawable(context, drawableName, expectedSha256)
-    }
-    Card(colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(channel, fontWeight = FontWeight.SemiBold)
-            Box(
-                Modifier
-                    .size(230.dp)
-                    .background(Color(0xFFF2F2F7), RoundedCornerShape(18.dp))
-                    .border(1.dp, Color(0xFFD1D1D6), RoundedCornerShape(18.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                if (drawableId != null) {
-                    Image(
-                        painter = painterResource(drawableId),
-                        contentDescription = "$channel 赞助二维码",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(12.dp)
-                    )
-                } else {
-                    Text(
-                        if (drawableName.isBlank()) "作者暂未配置" else "二维码校验失败",
-                        color = Color(0xFF8E8E93)
-                    )
-                }
-            }
-        }
-    }
-}
-
-private fun validateDonationDrawable(
-    context: android.content.Context,
-    drawableName: String,
-    expectedSha256: String
-): Int? {
-    if (drawableName.isBlank() || expectedSha256.isBlank()) return null
-    val resourceId = context.resources.getIdentifier(
-        drawableName,
-        "drawable",
-        context.packageName
-    )
-    if (resourceId == 0) return null
-    return runCatching {
-        val actual = context.resources.openRawResource(resourceId).use { input ->
-            val digest = MessageDigest.getInstance("SHA-256")
-            val buffer = ByteArray(8192)
-            while (true) {
-                val read = input.read(buffer)
-                if (read <= 0) break
-                digest.update(buffer, 0, read)
-            }
-            digest.digest().joinToString("") { "%02x".format(it) }
-        }
-        resourceId.takeIf { actual.equals(expectedSha256, ignoreCase = true) }
-    }.getOrNull()
-}
-
-@Composable
 private fun SettingsWorkspace(
     credential: StoredDeviceCredential?,
     mainCameraOnly: Boolean,
+    telemetryEnabled: Boolean,
     onMainCameraOnlyChanged: (Boolean) -> Unit,
+    onTelemetryChanged: (Boolean) -> Unit,
     onBack: () -> Unit,
     onPair: () -> Unit,
     onTerms: () -> Unit,
@@ -533,7 +434,7 @@ private fun SettingsWorkspace(
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         FeatureHeader(onBack, "设置", "连接信息、软件版本与开发者信息")
-        InfoCard("软件名称", "电商拆包智能录像")
+        InfoCard("软件名称", "拆包智录")
         InfoCard("版本号", BuildConfig.VERSION_NAME)
         InfoCard("开发者", "五成")
         InfoCard("电脑工位", credential?.stationId ?: "尚未配对")
@@ -549,6 +450,19 @@ private fun SettingsWorkspace(
                     )
                 }
                 Switch(checked = mainCameraOnly, onCheckedChange = onMainCameraOnlyChanged)
+            }
+        }
+        Card(colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("匿名日活", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "每天最多发送一次匿名安装信号，不发送单号、录像、路径或设备标识",
+                        color = Color(0xFF6E6E73),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Switch(checked = telemetryEnabled, onCheckedChange = onTelemetryChanged)
             }
         }
         Button(onClick = onPair, modifier = Modifier.fillMaxWidth()) {
@@ -646,14 +560,14 @@ private fun SettingsWorkspace(
             }
         }
         Text(
-            "数据默认仅在局域网和本机保存，不需要云账号。联网更新只访问 GitHub，不上传单号、录像、Excel 或设备信息。",
+            "数据默认仅在局域网和本机保存，不需要云账号。匿名日活和更新只进行出站 HTTPS 请求，不开放互联网入口。",
             color = Color(0xFF6E6E73)
         )
     }
 }
 
 @Composable
-private fun InfoCard(label: String, value: String) {
+internal fun InfoCard(label: String, value: String) {
     Card(colors = CardDefaults.cardColors(containerColor = Color.White), modifier = Modifier.fillMaxWidth()) {
         Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(label, color = Color(0xFF6E6E73), modifier = Modifier.weight(1f))
@@ -663,7 +577,7 @@ private fun InfoCard(label: String, value: String) {
 }
 
 @Composable
-private fun FeatureHeader(onBack: () -> Unit, title: String, description: String, dark: Boolean = false) {
+internal fun FeatureHeader(onBack: () -> Unit, title: String, description: String, dark: Boolean = false) {
     val foreground = if (dark) Color.White else Color(0xFF1C1C1E)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         OutlinedButton(onClick = onBack, modifier = Modifier.width(64.dp)) { Text("←", color = foreground) }
@@ -805,9 +719,11 @@ private fun ModeWorkspace(
     var bitrate by remember { mutableLongStateOf(0L) }
     var currentTrackingNo by remember { mutableStateOf<String?>(null) }
     var remoteRecordingState by remember { mutableStateOf("Idle") }
-    var startComputerRecording by remember { mutableStateOf(true) }
+    var startComputerRecording by remember {
+        mutableStateOf(IssueRemoteUiContract.DEFAULT_START_COMPUTER_RECORDING)
+    }
     var streamingActive by remember { mutableStateOf(false) }
-    var torchEnabled by remember { mutableStateOf(false) }
+    var torchEnabled by remember { mutableStateOf(IssueRemoteUiContract.DEFAULT_TORCH_ENABLED) }
     var connectionState by remember {
         mutableStateOf(if (credential == null) ComputerConnectionState.NotPaired else ComputerConnectionState.Checking)
     }
@@ -1186,6 +1102,7 @@ private fun RemoteControls(
     modifier: Modifier = Modifier
 ) {
     var note by remember { mutableStateOf("") }
+    var advancedSettingsExpanded by rememberSaveable { mutableStateOf(false) }
     val connectionLabel = when (connectionState) {
         ComputerConnectionState.Connected -> "已连接"
         ComputerConnectionState.Checking -> "连接中"
@@ -1223,10 +1140,13 @@ private fun RemoteControls(
                 OutlinedButton(onClick = onRefresh, enabled = refreshEnabled) { Text("刷新状态") }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Button(onClick = { send("UV-TAG-DAMAGE01") }, enabled = commandEnabled, modifier = Modifier.weight(1f)) { Text("破损") }
-                Button(onClick = { send("UV-TAG-SWAPPED1") }, enabled = commandEnabled, modifier = Modifier.weight(1f)) { Text("调包") }
-                OutlinedButton(onClick = { send("UV-UNDO-TAG") }, enabled = commandEnabled, modifier = Modifier.weight(1f)) { Text("撤销") }
-                OutlinedButton(onClick = { send("UV-SNAPSHOT") }, enabled = commandEnabled, modifier = Modifier.weight(1f)) { Text("截图") }
+                IssueRemoteUiContract.tagActions.forEach { action ->
+                    Button(
+                        onClick = { send(action.command) },
+                        enabled = commandEnabled,
+                        modifier = Modifier.weight(1f)
+                    ) { Text(action.label) }
+                }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
@@ -1236,32 +1156,69 @@ private fun RemoteControls(
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
-                Button(onClick = { send("UV-NOTE:${note.trim()}") }, enabled = commandEnabled) { Text("保存") }
                 Button(
-                    onClick = { send("UV-STOP") },
+                    onClick = { send(IssueRemoteUiContract.noteCommand(note.trim())) },
+                    enabled = commandEnabled
+                ) { Text("保存") }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { send(IssueRemoteUiContract.SNAPSHOT_COMMAND) },
                     enabled = commandEnabled,
+                    modifier = Modifier.weight(1f)
+                ) { Text("截图") }
+                Button(
+                    onClick = { send(IssueRemoteUiContract.STOP_COMMAND) },
+                    enabled = commandEnabled,
+                    modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF3B30))
                 ) { Text("停止") }
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Checkbox(checked = startComputerRecording, onCheckedChange = onStartComputerRecordingChanged)
-                Column(Modifier.weight(1f)) {
-                    Text("启动电脑录像", fontWeight = FontWeight.SemiBold)
-                    Text(
-                        if (startComputerRecording) "扫码将开始、结束或切换电脑录像" else "仅收集单号并同步 Excel",
-                        color = Color(0xFF6E6E73),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-                if (queuedScanCount > 0) Text("待同步 $queuedScanCount", color = Color(0xFFFF9500))
+            OutlinedButton(
+                onClick = { advancedSettingsExpanded = !advancedSettingsExpanded },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (advancedSettingsExpanded) "收起设置 ▲" else "更多设置 ▼")
             }
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Switch(checked = torchEnabled, onCheckedChange = onTorchChanged)
-                Column(Modifier.weight(1f).padding(start = 8.dp)) {
-                    Text("闪光灯", fontWeight = FontWeight.SemiBold)
-                    Text("光线暗时打开，扫描面单条码更稳定", color = Color(0xFF6E6E73), style = MaterialTheme.typography.bodySmall)
-                }
+            if (advancedSettingsExpanded) {
+                RemoteOptionRow(
+                    checked = startComputerRecording,
+                    title = "启动电脑录像",
+                    description = if (startComputerRecording) {
+                        "扫码将开始、结束或切换电脑录像"
+                    } else {
+                        "仅收集单号并同步 Excel"
+                    },
+                    trailingText = queuedScanCount.takeIf { it > 0 }?.let { "待同步 $it" },
+                    onCheckedChange = onStartComputerRecordingChanged
+                )
+                RemoteOptionRow(
+                    checked = torchEnabled,
+                    title = "闪光灯",
+                    description = "光线暗时打开，扫描面单条码更稳定",
+                    onCheckedChange = onTorchChanged
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun RemoteOptionRow(
+    checked: Boolean,
+    title: String,
+    description: String,
+    onCheckedChange: (Boolean) -> Unit,
+    trailingText: String? = null
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = checked, onCheckedChange = onCheckedChange)
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.SemiBold)
+            Text(description, color = Color(0xFF6E6E73), style = MaterialTheme.typography.bodySmall)
+        }
+        if (trailingText != null) {
+            Text(trailingText, color = Color(0xFFFF9500), style = MaterialTheme.typography.bodySmall)
         }
     }
 }

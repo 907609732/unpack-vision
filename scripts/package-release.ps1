@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '2.2.0',
+    [string]$Version = '2.3.2',
     [string]$AndroidApk,
     [switch]$SkipPublish,
     [switch]$RebuildExisting
@@ -15,6 +15,17 @@ $releaseDirectory = Join-Path $repositoryRoot 'artifacts\release-output'
 $toolDirectory = Join-Path $repositoryRoot 'artifacts\tools'
 $iconPath = Join-Path $repositoryRoot 'src\UnpackVision.App\Assets\EcommerceUnpackRecorder.ico'
 $releaseNotes = Join-Path $repositoryRoot "docs\releases\$Version.md"
+$parsedVersion = $null
+if (-not [Version]::TryParse($Version, [ref]$parsedVersion) -or
+    $parsedVersion.Major -gt 2147 -or
+    $parsedVersion.Minor -gt 99 -or
+    $parsedVersion.Build -gt 99) {
+    throw "Version must be numeric major.minor.patch with minor and patch below 100: $Version"
+}
+$versionCode = [int](
+    $parsedVersion.Major * 10000 +
+    $parsedVersion.Minor * 100 +
+    [Math]::Max(0, $parsedVersion.Build))
 
 if (-not $SkipPublish) {
     & (Join-Path $PSScriptRoot 'publish.ps1') -AppFolder $publishFolder
@@ -119,7 +130,7 @@ if (-not [string]::IsNullOrWhiteSpace($AndroidApk)) {
     $apkHash = (Get-FileHash -LiteralPath $apkDestination -Algorithm SHA256).Hash.ToLowerInvariant()
     $mobileManifest = @{
         versionName = $Version
-        versionCode = 20200
+        versionCode = $versionCode
         apkUrl = 'https://github.com/907609732/unpack-vision/releases/latest/download/EcommerceUnpackRecorder-Android.apk'
         sha256 = $apkHash
         minSdk = 26

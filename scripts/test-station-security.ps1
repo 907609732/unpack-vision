@@ -2,6 +2,18 @@
 param()
 
 $ErrorActionPreference = 'Stop'
+
+function Get-FreeTcpPort {
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return ([Net.IPEndPoint]$listener.LocalEndpoint).Port
+    }
+    finally {
+        $listener.Stop()
+    }
+}
+
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $tempRootPath = [IO.Path]::GetFullPath($env:TEMP)
 Get-ChildItem -LiteralPath $tempRootPath -Directory -Filter 'UnpackVision-SecurityTest-*' |
@@ -30,12 +42,19 @@ $startInfo.CreateNoWindow = $true
 $startInfo.RedirectStandardOutput = $true
 $startInfo.RedirectStandardError = $true
 $startInfo.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+$loopbackPort = Get-FreeTcpPort
+do {
+    $lanHttpsPort = Get-FreeTcpPort
+} while ($lanHttpsPort -eq $loopbackPort)
 $startInfo.Arguments = (@(
     "--Storage:DatabasePath=$testRoot\test.db",
     "--Storage:RecordingRoot=$testRoot\Videos",
     "--StationHost:SecurityDirectory=$testRoot\Security",
-    '--StationHost:StationId=security-test'
+    '--StationHost:StationId=security-test',
+    "--StationHost:LoopbackPort=$loopbackPort",
+    "--StationHost:LanHttpsPort=$lanHttpsPort"
 ) -join ' ')
+$startInfo.Environment["UNPACKVISION_ALLOW_TEST_INSTANCE"] = "1"
 
 $process = [Diagnostics.Process]::Start($startInfo)
 try {
@@ -44,7 +63,7 @@ try {
         Start-Sleep -Milliseconds 250
         try {
             $health = Invoke-RestMethod `
-                -Uri 'http://127.0.0.1:5271/api/v1/health' `
+                -Uri "http://127.0.0.1:$loopbackPort/api/v1/health" `
                 -TimeoutSec 2
         }
         catch {
@@ -58,7 +77,8 @@ try {
     if ($listeners.LocalAddress -contains '0.0.0.0') {
         throw 'StationHost must never bind all network interfaces.'
     }
-    $publicInterfaceAddresses = Get-NetConnectionProfile |
+    $networkProfiles = Get-NetConnectionProfile
+    $publicInterfaceAddresses = $networkProfiles |
         Where-Object NetworkCategory -eq 'Public' |
         ForEach-Object {
             Get-NetIPAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue
@@ -70,20 +90,41 @@ try {
         }
     }
     $lanListener = $listeners |
-        Where-Object LocalPort -eq 5273 |
+        Where-Object LocalPort -eq $lanHttpsPort |
         Select-Object -First 1
     if ($null -eq $lanListener) {
         throw 'StationHost did not bind a private HTTPS listener.'
     }
-    $pairing = Invoke-RestMethod `
-        -Uri (
-            'http://127.0.0.1:5271/api/v1/pairing/sessions?address=' +
-            [uri]::EscapeDataString($lanListener.LocalAddress)) `
-        -Method Post `
-        -TimeoutSec 3
-    if ($pairing.stationAddress -ne "https://$($lanListener.LocalAddress):5273" -or
-        $pairing.certificateFingerprint -notmatch '^[0-9a-f]{64}$') {
-        throw 'Pairing descriptor did not contain the pinned HTTPS endpoint.'
+    $privateInterfaceAddresses = $networkProfiles |
+        Where-Object NetworkCategory -eq 'Private' |
+        ForEach-Object {
+            Get-NetIPAddress `
+                -InterfaceIndex $_.InterfaceIndex `
+                -AddressFamily IPv4 `
+                -AddressState Preferred `
+                -ErrorAction SilentlyContinue
+        } |
+        Where-Object {
+            $_.IPAddress -match '^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)'
+        } |
+        Select-Object -ExpandProperty IPAddress -Unique
+    $lanListeners = @($listeners | Where-Object LocalPort -eq $lanHttpsPort)
+    $pairingAddresses = @()
+    foreach ($address in $privateInterfaceAddresses) {
+        if ($lanListeners.LocalAddress -notcontains $address) {
+            throw "StationHost did not bind private address: $address"
+        }
+        $pairing = Invoke-RestMethod `
+            -Uri (
+                "http://127.0.0.1:$loopbackPort/api/v1/pairing/sessions?address=" +
+                [uri]::EscapeDataString($address)) `
+            -Method Post `
+            -TimeoutSec 3
+        if ($pairing.stationAddress -ne "https://${address}:$lanHttpsPort" -or
+            $pairing.certificateFingerprint -notmatch '^[0-9a-f]{64}$') {
+            throw "Pairing descriptor did not contain the pinned HTTPS endpoint for $address."
+        }
+        $pairingAddresses += $pairing.stationAddress
     }
     $invalidHostStatus = & curl.exe `
         --silent `
@@ -93,7 +134,7 @@ try {
         --write-out '%{http_code}' `
         --insecure `
         --header 'Host: attacker.example' `
-        "https://$($lanListener.LocalAddress):5273/api/v1/health"
+        "https://$($lanListener.LocalAddress):$lanHttpsPort/api/v1/health"
     if ($invalidHostStatus -ne '400') {
         throw "Invalid Host header was not rejected: $invalidHostStatus"
     }
@@ -104,11 +145,11 @@ try {
         Tls = $health.tls
         ProcessId = $process.Id
         Listeners = ($listeners | ForEach-Object { "$($_.LocalAddress):$($_.LocalPort)" }) -join ', '
-        PairingAddress = $pairing.stationAddress
+        PairingAddresses = $pairingAddresses -join ', '
         InvalidHostStatus = $invalidHostStatus
     }
     Invoke-WebRequest `
-        -Uri 'http://127.0.0.1:5271/internal/shutdown' `
+        -Uri "http://127.0.0.1:$loopbackPort/internal/shutdown" `
         -Method Post `
         -UseBasicParsing `
         -TimeoutSec 3 |

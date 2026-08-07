@@ -1,7 +1,11 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Source
+    [string]$Source,
+
+    [string]$AlphaMask,
+
+    [string]$ProcessedSourceDestination
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,6 +46,31 @@ function New-TransparentMaster([string]$path) {
     }
     finally {
         $sourceBitmap.Dispose()
+    }
+}
+
+function Apply-AlphaMask([System.Drawing.Bitmap]$source, [string]$maskPath) {
+    $mask = [System.Drawing.Bitmap]::new($maskPath)
+    try {
+        if ($mask.Width -ne $source.Width -or $mask.Height -ne $source.Height) {
+            throw "Alpha mask dimensions must match the source image."
+        }
+
+        $result = [System.Drawing.Bitmap]::new(
+            $source.Width,
+            $source.Height,
+            [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        for ($y = 0; $y -lt $source.Height; $y++) {
+            for ($x = 0; $x -lt $source.Width; $x++) {
+                $pixel = $source.GetPixel($x, $y)
+                $alpha = $mask.GetPixel($x, $y).A
+                $result.SetPixel($x, $y, [System.Drawing.Color]::FromArgb($alpha, $pixel.R, $pixel.G, $pixel.B))
+            }
+        }
+        return $result
+    }
+    finally {
+        $mask.Dispose()
     }
 }
 
@@ -125,7 +154,23 @@ function Write-MultiSizeIcon([System.Drawing.Bitmap]$source, [string]$destinatio
 }
 
 $master = New-TransparentMaster $sourcePath
+if (-not [string]::IsNullOrWhiteSpace($AlphaMask)) {
+    $alphaMaskPath = [System.IO.Path]::GetFullPath($AlphaMask)
+    if (-not (Test-Path -LiteralPath $alphaMaskPath)) {
+        $master.Dispose()
+        throw "Alpha mask not found: $alphaMaskPath"
+    }
+    $maskedMaster = Apply-AlphaMask $master $alphaMaskPath
+    $master.Dispose()
+    $master = $maskedMaster
+}
 try {
+    if (-not [string]::IsNullOrWhiteSpace($ProcessedSourceDestination)) {
+        $processedSourcePath = [System.IO.Path]::GetFullPath($ProcessedSourceDestination)
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $processedSourcePath) | Out-Null
+        $master.Save($processedSourcePath, [System.Drawing.Imaging.ImageFormat]::Png)
+    }
+
     $masterPath = Join-Path $desktopAssets 'EcommerceUnpackRecorder-Logo.png'
     Save-ResizedPng $master 1024 $masterPath
     Save-ResizedPng $master 512 (Join-Path $readmeAssets 'logo.png')

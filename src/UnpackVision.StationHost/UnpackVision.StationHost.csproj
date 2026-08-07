@@ -1,10 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <TargetFramework>net10.0-windows</TargetFramework>
-    <AssemblyName>电商拆包智能录像工位主机</AssemblyName>
-    <Version>2.2.0</Version>
+    <AssemblyName>拆包智录工位主机</AssemblyName>
+    <Version>2.3.2</Version>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../UnpackVision.Application/UnpackVision.Application.csproj" />
     <ProjectReference Include="../UnpackVision.Core/UnpackVision.Core.csproj" />
     <ProjectReference Include="../UnpackVision.Infrastructure/UnpackVision.Infrastructure.csproj" />
     <PackageReference Include="Makaretu.Dns.Multicast" Version="0.27.0" />

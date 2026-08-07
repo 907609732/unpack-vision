@@ -17,7 +17,7 @@
         <TextBlock Margin="0,7,0,0" Foreground="#6E7380"
                    Text="每台手机使用独立令牌。删除后，该手机将立即失去全部权限，必须重新扫码配对。" />
       </StackPanel>
-      <Button Content="刷新" HorizontalAlignment="Right" VerticalAlignment="Center"
+      <Button x:Name="RefreshButton" Content="刷新" HorizontalAlignment="Right" VerticalAlignment="Center"
               Padding="18,8" Click="Refresh_OnClick" />
     </Grid>
     <Border Grid.Row="1" Margin="0,18,0,0" Padding="12" CornerRadius="12"
@@ -28,12 +28,12 @@
               AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True"
               SelectionMode="Single" HeadersVisibility="Column">
       <DataGrid.Columns>
-        <local:SelectableTextColumn Header="设备名称" Binding="{Binding Name}" Width="150" />
-        <local:SelectableTextColumn Header="状态" Binding="{Binding Status}" Width="85" />
-        <local:SelectableTextColumn Header="角色" Binding="{Binding Roles}" Width="145" />
-        <local:SelectableTextColumn Header="权限" Binding="{Binding Scopes}" Width="220" />
-        <local:SelectableTextColumn Header="配对时间" Binding="{Binding PairedAt}" Width="145" />
-        <local:SelectableTextColumn Header="最近在线" Binding="{Binding LastSeenAt}" Width="145" />
+        <local:SelectableTextColumn Header="设备名称" Binding="{Binding Name, Mode=OneWay}" Width="150" />
+        <local:SelectableTextColumn Header="状态" Binding="{Binding Status, Mode=OneWay}" Width="85" />
+        <local:SelectableTextColumn Header="角色" Binding="{Binding Roles, Mode=OneWay}" Width="145" />
+        <local:SelectableTextColumn Header="权限" Binding="{Binding Scopes, Mode=OneWay}" Width="220" />
+        <local:SelectableTextColumn Header="配对时间" Binding="{Binding PairedAt, Mode=OneWay}" Width="145" />
+        <local:SelectableTextColumn Header="最近在线" Binding="{Binding LastSeenAt, Mode=OneWay}" Width="145" />
       </DataGrid.Columns>
     </DataGrid>
     <Grid Grid.Row="3" Margin="0,16,0,0">
