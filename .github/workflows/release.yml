@@ -13,7 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 180
 
     steps:
       - name: Checkout
@@ -78,6 +78,13 @@ jobs:
           "UNPACKVISION_TELEMETRY_ENDPOINT=$endpoint" |
             Out-File -FilePath $env:GITHUB_ENV -Append
 
+      - name: Resolve release version
+        id: release_version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
       - name: Test and build signed Android APK
         shell: pwsh
         run: |
@@ -103,15 +110,142 @@ jobs:
             $global:LASTEXITCODE = 0
           }
 
-      - name: Build Windows installer and release files
-        id: release_version
+      - name: Publish Windows application
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
-          "value=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $version = "${{ steps.release_version.outputs.value }}"
+          .\scripts\publish.ps1 -AppFolder "staging\$version\App"
+
+      - name: Validate SignPath configuration
+        if: ${{ vars.WINDOWS_STABLE_SIGNING_READY == 'true' }}
+        shell: pwsh
+        env:
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          SIGNPATH_APPLICATION_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_APPLICATION_ARTIFACT_CONFIGURATION_SLUG }}
+          SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG: ${{ vars.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
+        run: |
+          $required = @(
+            'SIGNPATH_API_TOKEN',
+            'SIGNPATH_ORGANIZATION_ID',
+            'SIGNPATH_PROJECT_SLUG',
+            'SIGNPATH_SIGNING_POLICY_SLUG',
+            'SIGNPATH_APPLICATION_ARTIFACT_CONFIGURATION_SLUG',
+            'SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG'
+          )
+          $missing = $required | Where-Object {
+            [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_))
+          }
+          if ($missing.Count -gt 0) {
+            throw "Stable signing is enabled but SignPath configuration is missing: $($missing -join ', ')"
+          }
+
+      # Application binaries must be signed before Velopack creates the full package.
+      # Signing only Setup.exe would leave the installed desktop binaries unsigned.
+      - name: Upload unsigned Windows application
+        id: upload_unsigned_windows_application
+        if: ${{ vars.WINDOWS_STABLE_SIGNING_READY == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-application-unsigned-${{ github.run_id }}
+          path: |
+            artifacts/publish/staging/${{ steps.release_version.outputs.value }}/App/UnpackVision.*.dll
+            artifacts/publish/staging/${{ steps.release_version.outputs.value }}/App/拆包智录.dll
+            artifacts/publish/staging/${{ steps.release_version.outputs.value }}/App/拆包智录.exe
+            artifacts/publish/staging/${{ steps.release_version.outputs.value }}/App/StationHost/UnpackVision.*.dll
+            artifacts/publish/staging/${{ steps.release_version.outputs.value }}/App/StationHost/拆包智录工位主机.dll
+            artifacts/publish/staging/${{ steps.release_version.outputs.value }}/App/StationHost/拆包智录工位主机.exe
+            artifacts/publish/staging/${{ steps.release_version.outputs.value }}/App/Service/UnpackVision.*.dll
+            artifacts/publish/staging/${{ steps.release_version.outputs.value }}/App/Service/拆包智录兼容同步服务.dll
+            artifacts/publish/staging/${{ steps.release_version.outputs.value }}/App/Service/拆包智录兼容同步服务.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign Windows application with SignPath
+        if: ${{ vars.WINDOWS_STABLE_SIGNING_READY == 'true' }}
+        uses: SignPath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_APPLICATION_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload_unsigned_windows_application.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: artifacts/signpath/application
+
+      - name: Install signed Windows application outputs
+        if: ${{ vars.WINDOWS_STABLE_SIGNING_READY == 'true' }}
+        shell: pwsh
+        run: |
+          $source = ".\artifacts\signpath\application"
+          $destination = ".\artifacts\publish\staging\${{ steps.release_version.outputs.value }}\App"
+          if (-not (Test-Path -LiteralPath $source)) {
+            throw "SignPath did not return the signed Windows application artifact."
+          }
+          Copy-Item -Path (Join-Path $source '*') -Destination $destination -Recurse -Force
+
+      - name: Build Windows installer and release files
+        shell: pwsh
+        run: |
+          $version = "${{ steps.release_version.outputs.value }}"
           .\scripts\package-release.ps1 `
             -Version $version `
+            -SkipPublish `
             -AndroidApk .\mobile\UnpackVision.Android\app\build\outputs\apk\release\app-release.apk
+
+      # The outer installers are signed only after packaging. The application files
+      # inside them already contain the signatures produced by the preceding request.
+      - name: Upload unsigned Windows installers
+        id: upload_unsigned_windows_installers
+        if: ${{ vars.WINDOWS_STABLE_SIGNING_READY == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-installers-unsigned-${{ github.run_id }}
+          path: artifacts/release-output/*Setup.exe
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Sign Windows installers with SignPath
+        if: ${{ vars.WINDOWS_STABLE_SIGNING_READY == 'true' }}
+        uses: SignPath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.upload_unsigned_windows_installers.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: artifacts/signpath/installers
+
+      - name: Install signed Windows installer outputs
+        if: ${{ vars.WINDOWS_STABLE_SIGNING_READY == 'true' }}
+        shell: pwsh
+        run: |
+          $source = ".\artifacts\signpath\installers"
+          $destination = ".\artifacts\release-output"
+          if (-not (Test-Path -LiteralPath $source)) {
+            throw "SignPath did not return the signed Windows installer artifact."
+          }
+          Copy-Item -Path (Join-Path $source '*') -Destination $destination -Recurse -Force
+
+      - name: Refresh release checksums
+        shell: pwsh
+        run: |
+          $releaseDirectory = ".\artifacts\release-output"
+          $hashLines = Get-ChildItem -LiteralPath $releaseDirectory -File |
+            Where-Object Name -ne 'SHA256SUMS.txt' |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            }
+          $hashLines | Set-Content -LiteralPath (Join-Path $releaseDirectory 'SHA256SUMS.txt') -Encoding UTF8
 
       - name: Enforce Windows stable signing gate
         id: release_channel
@@ -123,15 +257,26 @@ jobs:
             $env:WINDOWS_STABLE_SIGNING_READY -eq "true"
           $version = "${{ steps.release_version.outputs.value }}"
           $staging = ".\artifacts\publish\staging\$version\App"
-          $ownedExecutables = @(
+          $ownedBinaries = @(
+            (Join-Path $staging "UnpackVision.Application.dll"),
+            (Join-Path $staging "UnpackVision.Core.dll"),
+            (Join-Path $staging "UnpackVision.Infrastructure.dll"),
+            (Join-Path $staging "拆包智录.dll"),
             (Join-Path $staging "拆包智录.exe"),
+            (Join-Path $staging "StationHost\UnpackVision.Application.dll"),
+            (Join-Path $staging "StationHost\UnpackVision.Core.dll"),
+            (Join-Path $staging "StationHost\UnpackVision.Infrastructure.dll"),
+            (Join-Path $staging "StationHost\拆包智录工位主机.dll"),
             (Join-Path $staging "StationHost\拆包智录工位主机.exe"),
+            (Join-Path $staging "Service\UnpackVision.Core.dll"),
+            (Join-Path $staging "Service\UnpackVision.Infrastructure.dll"),
+            (Join-Path $staging "Service\拆包智录兼容同步服务.dll"),
             (Join-Path $staging "Service\拆包智录兼容同步服务.exe"),
             ".\artifacts\release-output\EcommerceUnpackRecorder-win-Setup.exe",
             ".\artifacts\release-output\拆包智录-Setup.exe"
           )
           $invalid = @()
-          foreach ($path in $ownedExecutables) {
+          foreach ($path in $ownedBinaries) {
             if (-not (Test-Path -LiteralPath $path)) {
               $invalid += "$path (missing)"
               continue
