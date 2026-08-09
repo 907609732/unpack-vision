@@ -6,6 +6,19 @@ namespace UnpackVision.Tests;
 public sealed class IssueTagAndFileNameTests
 {
     [Fact]
+    public void MultiCameraPathsKeepPrimaryNameAndAddStableRoleSuffixes()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "UnpackVision-media-name");
+        var primary = Path.Combine(root, "SF1234567890_20260808090000_20260808090500_异常-破损.mp4");
+
+        var angle = RecordingFileNameService.GetAvailableMediaPath(primary, RecordMediaRole.Angle, "侧面/机位", Guid.Empty);
+        var composite = RecordingFileNameService.GetAvailableMediaPath(primary, RecordMediaRole.Composite, "ignored", Guid.Empty);
+
+        Assert.EndsWith("_异常-破损_机位-侧面-机位.mp4", angle, StringComparison.Ordinal);
+        Assert.EndsWith("_异常-破损_多机位.mp4", composite, StringComparison.Ordinal);
+        Assert.True(angle.Length <= 239);
+    }
+    [Fact]
     public void IssueBarcodeIsMatchedBeforeTrackingNumber()
     {
         var tags = IssueTagDefaults.Create();
@@ -18,6 +31,24 @@ public sealed class IssueTagAndFileNameTests
         Assert.Equal("破损", add.Tag?.Name);
         Assert.Equal(IssueBarcodeAction.UndoLastTag, undo.Action);
         Assert.Equal(IssueBarcodeAction.None, tracking.Action);
+    }
+
+    [Fact]
+    public void DefaultIssueTagsExposeStableUniqueMobileCommands()
+    {
+        var tags = IssueTagDefaults.Create();
+
+        Assert.Equal(4, tags.Count);
+        Assert.Equal(tags.Count, tags.Select(tag => tag.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(tags.Count, tags.Select(tag => tag.BarcodeValue).Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Contains(tags, tag =>
+            tag.Id == IssueTagDefaults.MissingTagId &&
+            tag.Name == "少件" &&
+            tag.BarcodeValue == IssueTagDefaults.MissingBarcode);
+        Assert.Contains(tags, tag =>
+            tag.Id == IssueTagDefaults.PurchaseTagId &&
+            tag.Name == "采购" &&
+            tag.BarcodeValue == IssueTagDefaults.PurchaseBarcode);
     }
 
     [Fact]

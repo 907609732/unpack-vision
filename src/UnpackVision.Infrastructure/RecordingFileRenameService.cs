@@ -30,7 +30,32 @@ public static class RecordingFileRenameService
         {
             expectedPath = Path.Combine(directory, $"{Path.GetFileNameWithoutExtension(expectedName)}_{record.Id.ToString("N")[..8]}.mp4");
         }
+        var mediaMoves = record.MediaAssets
+            .Where(asset => asset.Role != RecordMediaRole.Primary &&
+                            File.Exists(asset.VideoPath) &&
+                            IsUnderRoot(asset.VideoPath, recordingRoot))
+            .Select(asset => (Asset: asset, Target: RecordingFileNameService.GetAvailableMediaPath(
+                expectedPath,
+                asset.Role,
+                asset.DisplayName,
+                record.Id)))
+            .ToArray();
         File.Move(record.VideoPath, expectedPath, false);
+        foreach (var move in mediaMoves)
+        {
+            if (!string.Equals(Path.GetFullPath(move.Asset.VideoPath), Path.GetFullPath(move.Target), StringComparison.OrdinalIgnoreCase))
+            {
+                File.Move(move.Asset.VideoPath, move.Target, false);
+                move.Asset.VideoPath = move.Target;
+                move.Asset.UpdatedAt = DateTimeOffset.Now;
+            }
+        }
+        var primaryAsset = record.MediaAssets.FirstOrDefault(asset => asset.Role == RecordMediaRole.Primary);
+        if (primaryAsset is not null)
+        {
+            primaryAsset.VideoPath = expectedPath;
+            primaryAsset.UpdatedAt = DateTimeOffset.Now;
+        }
         return expectedPath;
     }
 

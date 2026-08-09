@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using UnpackVision.Application.Recording;
+using UnpackVision.Core;
 
-namespace UnpackVision.Core;
+namespace UnpackVision.Application.Scanning;
 
 public sealed class StationScanCommandRouter : IScanCommandRouter
 {

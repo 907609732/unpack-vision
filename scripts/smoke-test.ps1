@@ -16,6 +16,7 @@ New-Item -ItemType Directory -Force -Path $smokeRoot | Out-Null
 
 $env:DOTNET_CLI_HOME = Join-Path $projectRoot '.dotnet-home'
 $env:NUGET_PACKAGES = Join-Path $projectRoot '.nuget\packages'
+$env:UNPACKVISION_ALLOW_TEST_INSTANCE = '1'
 $env:Urls = 'http://127.0.0.1:5189'
 $env:Storage__DatabasePath = Join-Path $smokeRoot 'smoke.db'
 $env:Storage__RecordingRoot = Join-Path $smokeRoot 'recordings'

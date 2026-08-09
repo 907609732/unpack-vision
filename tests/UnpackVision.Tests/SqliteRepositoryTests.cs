@@ -30,8 +30,12 @@ public sealed class SqliteRepositoryTests : IDisposable
 
         var loaded = await repository.GetAsync(record.Id);
         var delivery = Assert.Single(await repository.GetDueDeliveriesAsync(10, now.AddMinutes(1)));
+        var deliveries = await repository.GetLatestDeliveriesAsync(
+            [record.Id, Guid.NewGuid()],
+            "excel");
 
         Assert.Equal("00123-ABC", loaded?.TrackingNo);
+        Assert.Equal(delivery.Id, Assert.Single(deliveries).Value.Id);
         Assert.True(await repository.TryClaimDeliveryAsync(delivery.Id));
         Assert.False(await repository.TryClaimDeliveryAsync(delivery.Id));
     }
@@ -148,6 +152,113 @@ public sealed class SqliteRepositoryTests : IDisposable
         Assert.Equal(["YT-004", "YT-003"], firstPage.Select(item => item.TrackingNo));
         Assert.Equal(["SF-MATCH-002", "YT-001"], secondPage.Select(item => item.TrackingNo));
         Assert.Equal("SF-MATCH-002", Assert.Single(filtered).TrackingNo);
+    }
+
+    [Fact]
+    public async Task LatestDeliveriesLoadsHistoryStatusInOneBatch()
+    {
+        var repository = new SqliteScanRecordRepository(new StorageOptions
+        {
+            DatabasePath = Path.Combine(_root, "delivery-batch.db")
+        });
+        await repository.InitializeAsync();
+        var now = DateTimeOffset.Now;
+        var records = Enumerable.Range(0, 120)
+            .Select(index => new ScanRecord
+            {
+                TrackingNo = $"BATCH-{index:000}",
+                State = RecordingState.Completed,
+                ScannedAt = now.AddSeconds(index),
+                CreatedAt = now.AddSeconds(index),
+                UpdatedAt = now.AddSeconds(index)
+            })
+            .ToArray();
+        foreach (var record in records)
+        {
+            await repository.AddAsync(record);
+            await repository.EnqueueDeliveryAsync(record.Id, "excel");
+        }
+
+        var deliveries = await repository.GetLatestDeliveriesAsync(
+            records.Select(record => record.Id).ToArray(),
+            "excel");
+
+        Assert.Equal(records.Length, deliveries.Count);
+        Assert.All(records, record => Assert.Equal(record.Id, deliveries[record.Id].RecordId));
+    }
+
+    [Fact]
+    public async Task PersistsMultipleMediaAssetsGapsAndDefaultPlaybackAsset()
+    {
+        var repository = new SqliteScanRecordRepository(new StorageOptions
+        {
+            DatabasePath = Path.Combine(_root, "multi-media.db")
+        });
+        await repository.InitializeAsync();
+        var now = DateTimeOffset.Now;
+        var record = new ScanRecord
+        {
+            TrackingNo = "MULTI-001",
+            State = RecordingState.Recording,
+            ScannedAt = now,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        await repository.AddAsync(record);
+        var primary = new RecordMediaAsset
+        {
+            RecordId = record.Id,
+            CameraId = "front",
+            DisplayName = "主机位",
+            Role = RecordMediaRole.Primary,
+            VideoPath = Path.Combine(_root, "primary.mp4"),
+            Width = 3840,
+            Height = 2160,
+            FramesPerSecond = 15,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var composite = new RecordMediaAsset
+        {
+            RecordId = record.Id,
+            CameraId = "composite",
+            DisplayName = "多机位合成",
+            Role = RecordMediaRole.Composite,
+            VideoPath = Path.Combine(_root, "composite.mp4"),
+            Width = 1920,
+            Height = 1080,
+            FramesPerSecond = 15,
+            Integrity = MediaIntegrityStatus.Partial,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        record.State = RecordingState.Completed;
+        record.VideoPath = primary.VideoPath;
+        record.CameraId = primary.CameraId;
+        record.MediaIntegrity = MediaIntegrityStatus.Partial;
+        record.DefaultMediaAssetId = composite.Id;
+        record.MediaAssets = [primary, composite];
+        record.MediaGaps = [new MediaGap
+        {
+            RecordId = record.Id,
+            MediaAssetId = composite.Id,
+            CameraId = "side",
+            StartedAt = now.AddSeconds(5),
+            EndedAt = now.AddSeconds(8),
+            Recovered = true,
+            Reason = "测试中断"
+        }];
+        await repository.CompleteAndEnqueueAsync(record, "excel");
+
+        var loaded = Assert.IsType<ScanRecord>(await repository.GetAsync(record.Id));
+        Assert.Equal(MediaIntegrityStatus.Partial, loaded.MediaIntegrity);
+        Assert.Equal(composite.Id, loaded.DefaultMediaAssetId);
+        Assert.Equal(2, loaded.MediaAssets.Count);
+        Assert.Single(loaded.MediaGaps);
+        Assert.Equal(composite.VideoPath, (await repository.GetMediaAssetAsync(record.Id, composite.Id))?.VideoPath);
+
+        await repository.InitializeAsync();
+        Assert.Equal(2, (await repository.GetMediaAssetsAsync(record.Id)).Count);
     }
 
     public void Dispose()

@@ -46,6 +46,7 @@ public sealed class CameraOptions
 {
     public CameraSourceKind SourceKind { get; set; } = CameraSourceKind.AutoLocal;
     public int CameraIndex { get; set; }
+    public string WindowsSymbolicLink { get; set; } = string.Empty;
     public bool AutoSelectBestCamera { get; set; } = true;
     public int ProbeCameraCount { get; set; } = 6;
     public double MinimumResolutionRatio { get; set; } = 0.9;
@@ -62,6 +63,7 @@ public sealed class CameraOptions
     public string NetworkUsername { get; set; } = string.Empty;
     public string NetworkPasswordProtected { get; set; } = string.Empty;
     public string HikvisionHost { get; set; } = string.Empty;
+    public int HikvisionHttpPort { get; set; } = 80;
     public int HikvisionRtspPort { get; set; } = 554;
     public int HikvisionChannel { get; set; } = 1;
     public bool HikvisionSubStream { get; set; }
@@ -97,4 +99,5 @@ public sealed class MediaRelayOptions
     public int RtspPort { get; set; } = 8554;
     public int RtspsPort { get; set; } = 8555;
     public int WebRtcPort { get; set; } = 8889;
+    public int WebRtcUdpPort { get; set; } = 8189;
 }

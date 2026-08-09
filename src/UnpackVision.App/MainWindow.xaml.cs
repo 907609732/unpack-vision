@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
@@ -10,6 +11,8 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using UnpackVision.Application.Recording;
+using UnpackVision.Application.Scanning;
 using UnpackVision.Core;
 using UnpackVision.Infrastructure;
 
@@ -17,6 +20,18 @@ namespace UnpackVision.App;
 
 public partial class MainWindow : Window
 {
+    internal bool IsRecordingOperationActive =>
+        _coordinator?.State is RecordingState.Recording or RecordingState.Starting or RecordingState.Saving;
+
+    internal async Task PrepareForUninstallAsync()
+    {
+        if (IsRecordingOperationActive)
+        {
+            throw new InvalidOperationException("正在录像、启动或保存时不能卸载");
+        }
+        await FlushIssueNoteAsync();
+        await StationHostConnection.StopAsync(_lifetime.Token);
+    }
     private static readonly Brush CameraReadyBackground = CreateFrozenBrush(232, 248, 239);
     private static readonly Brush CameraReadyForeground = CreateFrozenBrush(32, 126, 78);
     private readonly DispatcherTimer _recordingTimer;
@@ -30,7 +45,11 @@ public partial class MainWindow : Window
     private LocalSettings _settings = new();
     private StorageOptions? _storageOptions;
     private IScanRecordRepository? _repository;
-    private OpenCvRecordingBackend? _recordingBackend;
+    private MultiCameraRecordingBackend? _recordingBackend;
+    private readonly Dictionary<string, Image> _cameraPreviewImages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Border> _cameraPreviewTiles = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<CameraPreviewSlotPlan> _cameraPreviewSlotPlans = [];
+    private string? _expandedCameraId;
     private RecordingCoordinator? _coordinator;
     private IScanCommandLedger? _scanCommandLedger;
     private StationScanCommandRouter? _stationRouter;
@@ -45,7 +64,7 @@ public partial class MainWindow : Window
     private bool _shutdownStarted;
     private bool _allowClose;
     private bool _updatingCameraSourceSelector;
-    private int _previewUpdatePending;
+    private readonly ConcurrentDictionary<string, byte> _previewUpdatesPending = new(StringComparer.OrdinalIgnoreCase);
     private bool _loadingIssueNote;
     private bool _designerPageVisible;
     private bool _stationStatePollActive;
@@ -80,14 +99,18 @@ public partial class MainWindow : Window
             _storageOptions = new StorageOptions { RecordingRoot = _settings.RecordingRoot };
             var excelOptions = CreateExcelOptions();
 
-            _repository = new SqliteScanRecordRepository(_storageOptions);
+            var sqliteRepository = new SqliteScanRecordRepository(_storageOptions);
+            _repository = new PortableCatalogScanRecordRepository(
+                sqliteRepository,
+                () => new PortableRecordCatalog(_storageOptions.RecordingRoot));
             await _repository.InitializeAsync(_lifetime.Token);
             var interrupted = await new InterruptedRecordingRecovery(_repository, new SystemClock())
                 .MarkInterruptedAsync(_lifetime.Token);
 
-            _recordingBackend = new OpenCvRecordingBackend(_storageOptions, _settings.Camera);
+            _recordingBackend = new MultiCameraRecordingBackend(_storageOptions, _settings.CameraRig);
             _recordingBackend.PreviewFrameReady += RecordingBackend_OnPreviewFrameReady;
-            _recordingBackend.CameraError += RecordingBackend_OnCameraError;
+            _recordingBackend.CameraStateChanged += RecordingBackend_OnCameraStateChanged;
+            BuildCameraPreviewGrid();
             _coordinator = new RecordingCoordinator(
                 _repository,
                 _recordingBackend,
@@ -354,95 +377,6 @@ public partial class MainWindow : Window
         FooterText.Text = message;
     }
 
-    private async void OnStationStateTimer(object? sender, EventArgs e) =>
-        await PollStationStateAsync();
-
-    private async Task PollStationStateAsync()
-    {
-        if (_stationStatePollActive || _repository is null || _lifetime.IsCancellationRequested)
-        {
-            return;
-        }
-
-        _stationStatePollActive = true;
-        try
-        {
-            var stationId = Uri.EscapeDataString(Environment.MachineName);
-            var snapshot = await StationHostConnection.Http.GetFromJsonAsync<StationStateSnapshot>(
-                $"/api/v1/stations/{stationId}/state",
-                StationHostConnection.JsonOptions,
-                _lifetime.Token);
-            if (snapshot is null)
-            {
-                return;
-            }
-
-            var localRecording = _coordinator?.State is RecordingState.Starting or RecordingState.Recording or RecordingState.Saving;
-            switch (snapshot.RecordingState)
-            {
-                case RecordingState.Starting when !localRecording:
-                    CurrentStateText.Text = "手机指令 · 正在启动录像";
-                    StateDot.Fill = Brushes.Orange;
-                    FooterText.Text = snapshot.TrackingNo is { Length: > 0 }
-                        ? $"已收到手机扫码：{snapshot.TrackingNo}"
-                        : "已收到手机扫码，正在启动录像";
-                    break;
-
-                case RecordingState.Recording when !localRecording && snapshot.RecordId is { } recordId:
-                    if (_mirroredStationRecordId != recordId)
-                    {
-                        var record = await _repository.GetAsync(recordId, _lifetime.Token);
-                        if (record is not null)
-                        {
-                            _mirroredStationRecordId = recordId;
-                            ShowRecordingUi(record);
-                            FooterText.Text = $"手机扫码已触发录像：{record.TrackingNo}";
-                            Speak("手机扫码，开始录制");
-                        }
-                    }
-                    break;
-
-                case RecordingState.Saving when _mirroredStationRecordId is not null:
-                    CurrentStateText.Text = "手机指令 · 正在保存";
-                    StateDot.Fill = Brushes.Orange;
-                    FooterText.Text = "手机已发出结束指令，正在保存录像";
-                    break;
-
-                case RecordingState.Idle when _mirroredStationRecordId is not null:
-                case RecordingState.Completed when _mirroredStationRecordId is not null:
-                case RecordingState.Failed when _mirroredStationRecordId is not null:
-                    var failed = snapshot.RecordingState == RecordingState.Failed;
-                    _mirroredStationRecordId = null;
-                    ShowIdleUi(failed ? "手机指令录像失败，请查看全部记录" : "手机指令录像已保存，可以继续扫描");
-                    Speak(failed ? "录像失败，请检查记录" : "录像已保存");
-                    await RefreshRecentAsync();
-                    break;
-            }
-
-        }
-        catch (HttpRequestException)
-        {
-            if (_mirroredStationRecordId is not null)
-            {
-                FooterText.Text = "工位主机连接中断，正在自动重连";
-            }
-        }
-        catch (JsonException)
-        {
-            FooterText.Text = "工位主机状态格式异常，正在自动重试";
-        }
-        catch (TaskCanceledException) when (!_lifetime.IsCancellationRequested)
-        {
-        }
-        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
-        {
-        }
-        finally
-        {
-            _stationStatePollActive = false;
-        }
-    }
-
     private async void OnRecordingTimer(object? sender, EventArgs e)
     {
         if (_recordingStartedAt is null)
@@ -473,9 +407,9 @@ public partial class MainWindow : Window
         }
     }
 
-    private void RecordingBackend_OnPreviewFrameReady(object? sender, PreviewFrameEventArgs e)
+    private void RecordingBackend_OnPreviewFrameReady(object? sender, MultiCameraPreviewFrameEventArgs e)
     {
-        if (Interlocked.Exchange(ref _previewUpdatePending, 1) == 1 || _lifetime.IsCancellationRequested)
+        if (_lifetime.IsCancellationRequested || !_previewUpdatesPending.TryAdd(e.CameraId, 0))
         {
             return;
         }
@@ -483,7 +417,10 @@ public partial class MainWindow : Window
         {
             try
             {
-                CameraPreviewImage.Source = UiImage.FromBytes(e.JpegBytes);
+                if (_cameraPreviewImages.TryGetValue(e.CameraId, out var image))
+                {
+                    image.Source = UiImage.FromBytes(e.JpegBytes);
+                }
                 CameraPlaceholder.Visibility = Visibility.Collapsed;
                 var statusText = _recordingBackend?.IsRecording == true ? "相机正常 · 正在录像" : "相机正常 · 实时预览";
                 if (!string.Equals(_lastCameraStatusText, statusText, StringComparison.Ordinal))
@@ -497,13 +434,261 @@ public partial class MainWindow : Window
             }
             finally
             {
-                Interlocked.Exchange(ref _previewUpdatePending, 0);
+                _previewUpdatesPending.TryRemove(e.CameraId, out _);
             }
         });
     }
 
-    private void RecordingBackend_OnCameraError(object? sender, CameraErrorEventArgs e) =>
-        Dispatcher.BeginInvoke(() => ShowCameraError(e.Error.Message));
+    private void RecordingBackend_OnCameraStateChanged(object? sender, CameraRuntimeState state) =>
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_cameraPreviewTiles.TryGetValue(state.CameraId, out var tile))
+            {
+                tile.BorderBrush = state.ConnectionState == CameraConnectionState.Connected
+                    ? new SolidColorBrush(Color.FromRgb(72, 190, 116))
+                    : new SolidColorBrush(Color.FromRgb(235, 92, 92));
+            }
+            if (state.IsPrimary && state.ConnectionState is CameraConnectionState.Failed or CameraConnectionState.Missing)
+            {
+                ShowCameraError(state.Message ?? "主机位不可用");
+            }
+            UpdateCameraRuntimeInfo();
+        });
+
+    private void BuildCameraPreviewGrid()
+    {
+        CameraPreviewGrid.Children.Clear();
+        CameraPreviewGrid.RowDefinitions.Clear();
+        CameraPreviewGrid.ColumnDefinitions.Clear();
+        _cameraPreviewImages.Clear();
+        _cameraPreviewTiles.Clear();
+        var cameras = _recordingBackend?.Rig.EnabledCameras ?? _settings.CameraRig.EnabledCameras;
+        var viewCount = Math.Clamp(
+            _settings.PreviewLayout.ViewCount,
+            1,
+            CameraRigOptions.MaximumEnabledCameras);
+        _cameraPreviewSlotPlans = CameraPreviewLayoutPlanner.Build(
+            viewCount,
+            cameras,
+            _settings.PreviewLayout.CameraIds);
+        _settings.PreviewLayout.ViewCount = viewCount;
+        _settings.PreviewLayout.CameraIds = _cameraPreviewSlotPlans
+            .Select(plan => plan.Camera?.Id ?? string.Empty)
+            .ToList();
+        var columns = viewCount == 1 ? 1 : 2;
+        var rows = viewCount <= 2 ? 1 : 2;
+        for (var index = 0; index < columns; index++) CameraPreviewGrid.ColumnDefinitions.Add(new ColumnDefinition());
+        for (var index = 0; index < rows; index++) CameraPreviewGrid.RowDefinitions.Add(new RowDefinition());
+        foreach (var plan in _cameraPreviewSlotPlans)
+        {
+            var profile = plan.Camera;
+            var image = new Image
+            {
+                Stretch = _settings.FaceZoomEnabled ? Stretch.UniformToFill : Stretch.Uniform,
+                RenderTransformOrigin = new Point(0.5, 0.5),
+                Visibility = profile is null ? Visibility.Collapsed : Visibility.Visible
+            };
+            var label = new TextBlock
+            {
+                Text = profile is null
+                    ? $"画面 {plan.SlotIndex + 1} · 右键选择摄像头"
+                    : profile.IsPrimary
+                        ? $"● {profile.DisplayName} · 主机位"
+                        : $"● {profile.DisplayName}",
+                Foreground = Brushes.White,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold
+            };
+            var badge = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(185, 26, 28, 32)),
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(10, 5, 10, 5),
+                Margin = new Thickness(12),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+                Child = label
+            };
+            var content = new Grid();
+            content.Children.Add(image);
+            if (profile is null)
+            {
+                content.Children.Add(new TextBlock
+                {
+                    Text = "右键此画面选择摄像头",
+                    Foreground = new SolidColorBrush(Color.FromRgb(134, 140, 151)),
+                    FontSize = 14,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+            }
+            content.Children.Add(badge);
+            var tile = new Border
+            {
+                Tag = plan.SlotIndex,
+                Background = new SolidColorBrush(Color.FromRgb(18, 20, 24)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(65, 68, 74)),
+                BorderThickness = new Thickness(1),
+                Margin = viewCount == 1 ? new Thickness(0) : new Thickness(3),
+                CornerRadius = new CornerRadius(viewCount == 1 ? 0 : 14),
+                ClipToBounds = true,
+                Child = content,
+                ContextMenu = CreatePreviewCameraMenu(plan.SlotIndex, cameras, profile?.Id)
+            };
+            if (profile is not null)
+            {
+                tile.MouseLeftButtonUp += (_, _) => ToggleExpandedCamera(profile.Id);
+            }
+            Grid.SetColumn(tile, plan.Column);
+            Grid.SetRow(tile, plan.Row);
+            Grid.SetColumnSpan(tile, plan.ColumnSpan);
+            Grid.SetRowSpan(tile, plan.RowSpan);
+            CameraPreviewGrid.Children.Add(tile);
+            if (profile is not null)
+            {
+                _cameraPreviewImages[profile.Id] = image;
+                _cameraPreviewTiles[profile.Id] = tile;
+            }
+        }
+        UpdatePreviewLayoutButtons();
+    }
+
+    private ContextMenu CreatePreviewCameraMenu(
+        int slotIndex,
+        IReadOnlyList<CameraProfile> cameras,
+        string? selectedCameraId)
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(new MenuItem
+        {
+            Header = $"画面 {slotIndex + 1} 显示",
+            IsEnabled = false,
+            FontWeight = FontWeights.SemiBold
+        });
+        menu.Items.Add(new Separator());
+        foreach (var camera in cameras)
+        {
+            var item = new MenuItem
+            {
+                Header = camera.IsPrimary ? $"{camera.DisplayName}（主机位）" : camera.DisplayName,
+                IsCheckable = true,
+                IsChecked = string.Equals(camera.Id, selectedCameraId, StringComparison.OrdinalIgnoreCase),
+                Tag = new PreviewCameraAssignment(slotIndex, camera.Id)
+            };
+            item.Click += AssignPreviewCamera_OnClick;
+            menu.Items.Add(item);
+        }
+        menu.Items.Add(new Separator());
+        var settingsItem = new MenuItem { Header = "管理机位…" };
+        settingsItem.Click += OpenCameraSettingsFromPreview_OnClick;
+        menu.Items.Add(settingsItem);
+        return menu;
+    }
+
+    private async void PreviewLayoutButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string value } || !int.TryParse(value, out var viewCount))
+        {
+            return;
+        }
+        _settings.PreviewLayout.ViewCount = Math.Clamp(viewCount, 1, CameraRigOptions.MaximumEnabledCameras);
+        _expandedCameraId = null;
+        BuildCameraPreviewGrid();
+        await _settingsStore.SaveAsync(_settings, _lifetime.Token);
+        FooterText.Text = $"已切换为 {_settings.PreviewLayout.ViewCount} 画面；右键画面可以选择摄像头";
+    }
+
+    private async void AssignPreviewCamera_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem { Tag: PreviewCameraAssignment assignment })
+        {
+            return;
+        }
+        _settings.PreviewLayout.CameraIds = CameraPreviewLayoutPlanner.Assign(
+            _settings.PreviewLayout.CameraIds,
+            _settings.PreviewLayout.ViewCount,
+            assignment.SlotIndex,
+            assignment.CameraId).ToList();
+        _expandedCameraId = null;
+        _recordingBackend?.SelectCamera(assignment.CameraId);
+        BuildCameraPreviewGrid();
+        SelectCurrentCameraSourceChoice();
+        UpdateCameraRuntimeInfo();
+        await _settingsStore.SaveAsync(_settings, _lifetime.Token);
+        var camera = (_recordingBackend?.Rig.EnabledCameras ?? _settings.CameraRig.EnabledCameras)
+            .FirstOrDefault(item => string.Equals(item.Id, assignment.CameraId, StringComparison.OrdinalIgnoreCase));
+        FooterText.Text = $"画面 {assignment.SlotIndex + 1} 已切换为 {camera?.DisplayName ?? "所选摄像头"}";
+    }
+
+    private async void OpenCameraSettingsFromPreview_OnClick(object sender, RoutedEventArgs e) =>
+        await OpenSettingsAsync(true);
+
+    private void UpdatePreviewLayoutButtons()
+    {
+        foreach (var (button, count) in new[]
+                 {
+                     (PreviewLayout1Button, 1),
+                     (PreviewLayout2Button, 2),
+                     (PreviewLayout3Button, 3),
+                     (PreviewLayout4Button, 4)
+                 })
+        {
+            var selected = count == _settings.PreviewLayout.ViewCount;
+            button.Background = selected
+                ? new SolidColorBrush(Color.FromRgb(22, 119, 255))
+                : Brushes.Transparent;
+            button.Foreground = selected ? Brushes.White : new SolidColorBrush(Color.FromRgb(74, 79, 87));
+            button.BorderThickness = new Thickness(0);
+            button.FontWeight = selected ? FontWeights.SemiBold : FontWeights.Normal;
+        }
+    }
+
+    private void ToggleExpandedCamera(string cameraId)
+    {
+        if (!_cameraPreviewTiles.ContainsKey(cameraId))
+        {
+            return;
+        }
+        _expandedCameraId = string.Equals(_expandedCameraId, cameraId, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : cameraId;
+        foreach (var (id, tile) in _cameraPreviewTiles)
+        {
+            tile.Visibility = _expandedCameraId is null || string.Equals(id, _expandedCameraId, StringComparison.OrdinalIgnoreCase)
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            if (_expandedCameraId is not null && string.Equals(id, _expandedCameraId, StringComparison.OrdinalIgnoreCase))
+            {
+                Grid.SetRow(tile, 0);
+                Grid.SetColumn(tile, 0);
+                Grid.SetRowSpan(tile, Math.Max(1, CameraPreviewGrid.RowDefinitions.Count));
+                Grid.SetColumnSpan(tile, Math.Max(1, CameraPreviewGrid.ColumnDefinitions.Count));
+            }
+            else
+            {
+                var plan = _cameraPreviewSlotPlans.FirstOrDefault(item =>
+                    string.Equals(item.Camera?.Id, id, StringComparison.OrdinalIgnoreCase));
+                if (plan is not null)
+                {
+                    Grid.SetRow(tile, plan.Row);
+                    Grid.SetColumn(tile, plan.Column);
+                    Grid.SetRowSpan(tile, plan.RowSpan);
+                    Grid.SetColumnSpan(tile, plan.ColumnSpan);
+                }
+            }
+        }
+        _recordingBackend?.SelectCamera(cameraId);
+        SelectCurrentCameraSourceChoice();
+        UpdateCameraRuntimeInfo();
+    }
+
+    private void CameraPreviewGrid_OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        // Individual tiles handle the interaction; this named handler keeps the
+        // preview surface keyboard/mouse contract stable for XAML tests.
+    }
+
+    private sealed record PreviewCameraAssignment(int SlotIndex, string CameraId);
 
     private void ShowCameraError(string message)
     {
@@ -517,12 +702,13 @@ public partial class MainWindow : Window
 
     private void UpdateCameraRuntimeInfo()
     {
-        var info = _recordingBackend?.RuntimeInfo;
+        var info = _recordingBackend?.RuntimeStates.FirstOrDefault(state => state.CameraId == _recordingBackend.SelectedCameraId)
+            ?? _recordingBackend?.RuntimeStates.FirstOrDefault(state => state.IsPrimary);
         if (info is null)
         {
             return;
         }
-        var runtimeKey = $"{info.DisplayName}|{info.Width}|{info.Height}|{info.FramesPerSecond:0.###}";
+        var runtimeKey = $"{info.DisplayName}|{info.Width}|{info.Height}|{info.FramesPerSecond:0.###}|{info.ConnectionState}";
         if (string.Equals(_lastCameraRuntimeKey, runtimeKey, StringComparison.Ordinal))
         {
             return;
@@ -545,11 +731,14 @@ public partial class MainWindow : Window
                 .Where(record => record.State is RecordingState.Completed or RecordingState.Imported or RecordingState.Failed)
                 .Take(20)
                 .ToArray();
-            var items = await Task.WhenAll(records.Select(async record =>
-            {
-                var delivery = await _repository.GetDeliveryAsync(record.Id, "excel", _lifetime.Token);
-                return await RecentRecordingItem.CreateAsync(record, delivery);
-            }));
+            var deliveries = await _repository.GetLatestDeliveriesAsync(
+                records.Select(record => record.Id).ToArray(),
+                "excel",
+                _lifetime.Token);
+            var items = await Task.WhenAll(records.Select(record =>
+                RecentRecordingItem.CreateAsync(
+                    record,
+                    deliveries.GetValueOrDefault(record.Id))));
             RecentItemsControl.ItemsSource = items;
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
@@ -648,6 +837,27 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void SnapshotAllButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (_recordingBackend is null) return;
+        try
+        {
+            var paths = await _recordingBackend.TakeAllSnapshotsAsync(_lifetime.Token);
+            if (_coordinator?.CurrentRecord is { } current && _repository is not null)
+            {
+                current.Snapshots = [.. current.Snapshots, .. paths];
+                current.UpdatedAt = DateTimeOffset.Now;
+                await _repository.UpdateAsync(current, _lifetime.Token);
+            }
+            FooterText.Text = $"已保存 {paths.Count} 张机位照片";
+            Speak("全部机位拍照已保存");
+        }
+        catch (Exception ex)
+        {
+            FooterText.Text = ex.Message;
+        }
+    }
+
     private async void RotateLeftButton_OnClick(object sender, RoutedEventArgs e) => await RunCameraActionAsync(token => _recordingBackend!.RotateLeftAsync(token));
     private async void RotateRightButton_OnClick(object sender, RoutedEventArgs e) => await RunCameraActionAsync(token => _recordingBackend!.RotateRightAsync(token));
     private async void MirrorButton_OnClick(object sender, RoutedEventArgs e) => await RunCameraActionAsync(token => _recordingBackend!.ToggleMirrorAsync(token));
@@ -661,6 +871,7 @@ public partial class MainWindow : Window
         try
         {
             await action(_lifetime.Token);
+            await _settingsStore.SaveAsync(_settings, _lifetime.Token);
         }
         catch (Exception ex)
         {
@@ -729,11 +940,12 @@ public partial class MainWindow : Window
 
     private async void AutoFocusButton_OnClick(object sender, RoutedEventArgs e)
     {
-        _settings.Camera.AutoFocus = !_settings.Camera.AutoFocus;
-        AutoFocusButton.Content = _settings.Camera.AutoFocus ? "自动聚焦：开" : "自动聚焦：关";
+        var profile = SelectedCameraProfile();
+        profile.AutoFocus = !profile.AutoFocus;
+        AutoFocusButton.Content = profile.AutoFocus ? "自动聚焦：开" : "自动聚焦：关";
         if (_recordingBackend is not null)
         {
-            await _recordingBackend.SetAutoFocusAsync(_settings.Camera.AutoFocus, _lifetime.Token);
+            await _recordingBackend.SetAutoFocusAsync(profile.AutoFocus, _lifetime.Token);
         }
         await _settingsStore.SaveAsync(_settings, _lifetime.Token);
         ScannerInput.Focus();
@@ -776,10 +988,11 @@ public partial class MainWindow : Window
 
     private async Task ApplyCurrentImageControlsAsync(bool saveSettings)
     {
-        _settings.Camera.Brightness = BrightnessSlider.Value;
-        _settings.Camera.Contrast = ContrastSlider.Value;
-        _settings.Camera.Sharpness = SharpnessSlider.Value;
-        _settings.Camera.Saturation = SaturationSlider.Value;
+        var profile = SelectedCameraProfile();
+        profile.Brightness = BrightnessSlider.Value;
+        profile.Contrast = ContrastSlider.Value;
+        profile.Sharpness = SharpnessSlider.Value;
+        profile.Saturation = SaturationSlider.Value;
         if (_recordingBackend is not null)
         {
             await _recordingBackend.ApplyImageControlsAsync(
@@ -806,7 +1019,10 @@ public partial class MainWindow : Window
     private async void FaceZoomButton_OnClick(object sender, RoutedEventArgs e)
     {
         _settings.FaceZoomEnabled = !_settings.FaceZoomEnabled;
-        CameraPreviewImage.Stretch = _settings.FaceZoomEnabled ? Stretch.UniformToFill : Stretch.Uniform;
+        foreach (var image in _cameraPreviewImages.Values)
+        {
+            image.Stretch = _settings.FaceZoomEnabled ? Stretch.UniformToFill : Stretch.Uniform;
+        }
         FaceZoomButton.Content = _settings.FaceZoomEnabled ? "面单放大：开" : "面单放大：关";
         await _settingsStore.SaveAsync(_settings, _lifetime.Token);
         ScannerInput.Focus();
@@ -852,50 +1068,60 @@ public partial class MainWindow : Window
 
     private async Task OpenSettingsAsync(bool showCameraTab)
     {
-        var previousCamera = _settings.Camera;
-        var dialog = new SettingsWindow(_settings, showCameraTab) { Owner = this };
+        var previousRecordingRoot = _settings.RecordingRoot;
+        var previousExcelPath = _settings.ExcelWorkbookPath;
+        var dialog = new SettingsWindow(_settings, App.HikvisionDiscovery, showCameraTab) { Owner = this };
         if (dialog.ShowDialog() != true || dialog.SavedSettings is null)
         {
             ScannerInput.Focus();
             return;
         }
         _settings = dialog.SavedSettings;
+        var workspace = await new PortableRecordCatalog(_settings.RecordingRoot)
+            .EnsureWorkspaceAsync(
+                string.Equals(previousRecordingRoot, _settings.RecordingRoot, StringComparison.OrdinalIgnoreCase)
+                    ? _settings.Setup.WorkspaceId
+                    : null,
+                _lifetime.Token);
+        _settings.Setup.WorkspaceId = workspace.WorkspaceId;
+        _settings.Setup.Version = SetupState.CurrentVersion;
+        _settings.Setup.CompletedAt ??= DateTimeOffset.Now;
+        _settings.Setup.ExcelSkipped = string.IsNullOrWhiteSpace(_settings.ExcelWorkbookPath);
         await _settingsStore.SaveAsync(_settings, _lifetime.Token);
+        await App.ApplyTelemetryAsync(_settings, _lifetime.Token);
         _storageOptions!.RecordingRoot = _settings.RecordingRoot;
         _coordinator?.UpdateScannerProfile(_settings.Scanner);
         RebuildStationRouter();
         _syncDispatcher = new SyncDispatcher(_repository!, [new ExcelConnector(CreateExcelOptions())], new SystemClock());
+        if (string.IsNullOrWhiteSpace(previousExcelPath) &&
+            !string.IsNullOrWhiteSpace(_settings.ExcelWorkbookPath) &&
+            MessageBox.Show(
+                this,
+                "是否把数据库中尚未同步的历史完成记录加入 Excel 同步队列？",
+                "补同步历史记录",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) == MessageBoxResult.Yes)
+        {
+            foreach (var record in await _repository!.QueryAsync(limit: 2000, cancellationToken: _lifetime.Token))
+            {
+                if (record.State is RecordingState.Completed or RecordingState.Imported or RecordingState.Collected)
+                {
+                    await _repository.EnqueueDeliveryAsync(record.Id, "excel", _lifetime.Token);
+                }
+            }
+        }
         ApplySettingsVisuals();
         if (_recordingBackend is not null)
         {
-            var restartRequired = previousCamera.SourceKind != _settings.Camera.SourceKind ||
-                                  previousCamera.CameraIndex != _settings.Camera.CameraIndex ||
-                                  previousCamera.AutoSelectBestCamera != _settings.Camera.AutoSelectBestCamera ||
-                                  previousCamera.NetworkStreamUrl != _settings.Camera.NetworkStreamUrl ||
-                                  previousCamera.NetworkUsername != _settings.Camera.NetworkUsername ||
-                                  previousCamera.NetworkPasswordProtected != _settings.Camera.NetworkPasswordProtected ||
-                                  previousCamera.HikvisionHost != _settings.Camera.HikvisionHost ||
-                                  previousCamera.HikvisionRtspPort != _settings.Camera.HikvisionRtspPort ||
-                                  previousCamera.HikvisionChannel != _settings.Camera.HikvisionChannel ||
-                                  previousCamera.HikvisionSubStream != _settings.Camera.HikvisionSubStream ||
-                                  previousCamera.Width != _settings.Camera.Width ||
-                                  previousCamera.Height != _settings.Camera.Height ||
-                                  Math.Abs(previousCamera.FramesPerSecond - _settings.Camera.FramesPerSecond) > 0.01;
             try
             {
-                if (restartRequired)
+                if (_coordinator?.State is RecordingState.Recording or RecordingState.Starting or RecordingState.Saving)
                 {
-                    await _recordingBackend.RestartPreviewAsync(_settings.Camera, _lifetime.Token);
+                    FooterText.Text = "录像进行中，新的机位方案将在下次启动后生效";
                 }
                 else
                 {
-                    await _recordingBackend.ApplyImageControlsAsync(
-                        _settings.Camera.Brightness,
-                        _settings.Camera.Contrast,
-                        _settings.Camera.Sharpness,
-                        _settings.Camera.Saturation,
-                        _lifetime.Token);
-                    await _recordingBackend.SetAutoFocusAsync(_settings.Camera.AutoFocus, _lifetime.Token);
+                    await RecreateCameraBackendAsync();
                 }
             }
             catch (Exception ex)
@@ -906,18 +1132,89 @@ public partial class MainWindow : Window
         ScannerInput.Focus();
     }
 
+    private async Task RecreateCameraBackendAsync()
+    {
+        if (_repository is null || _recordingBackend is null)
+        {
+            return;
+        }
+        await _recordingBackend.DisposeAsync();
+        _recordingBackend = new MultiCameraRecordingBackend(_storageOptions!, _settings.CameraRig);
+        _recordingBackend.PreviewFrameReady += RecordingBackend_OnPreviewFrameReady;
+        _recordingBackend.CameraStateChanged += RecordingBackend_OnCameraStateChanged;
+        _coordinator = new RecordingCoordinator(
+            _repository,
+            _recordingBackend,
+            new NullEventPublisher(),
+            new SystemClock(),
+            _settings.Scanner);
+        _coordinator.StateChanged += Coordinator_OnStateChanged;
+        RebuildStationRouter();
+        PopulateCameraSourceSelector();
+        BuildCameraPreviewGrid();
+        if (_settings.ShowLivePreview)
+        {
+            await _recordingBackend.StartPreviewAsync(_lifetime.Token);
+        }
+        UpdateCameraRuntimeInfo();
+    }
+
+    internal async Task<CameraRigPerformanceResult> TestCandidateCameraRigAsync(
+        CameraRigOptions candidate,
+        IProgress<CameraPerformanceProgress>? progress = null)
+    {
+        if (_coordinator?.State is RecordingState.Recording or RecordingState.Starting or RecordingState.Saving)
+        {
+            throw new InvalidOperationException("录像过程中不能执行机位性能测试");
+        }
+        if (_recordingBackend is null || _storageOptions is null)
+        {
+            throw new InvalidOperationException("相机后端尚未初始化");
+        }
+
+        await _recordingBackend.DisposeAsync();
+        MultiCameraRecordingBackend? testBackend = null;
+        try
+        {
+            testBackend = new MultiCameraRecordingBackend(_storageOptions, candidate);
+            return await testBackend.TestPerformanceAsync(progress, _lifetime.Token);
+        }
+        finally
+        {
+            if (testBackend is not null)
+            {
+                await testBackend.DisposeAsync();
+            }
+            _recordingBackend = new MultiCameraRecordingBackend(_storageOptions, _settings.CameraRig);
+            _recordingBackend.PreviewFrameReady += RecordingBackend_OnPreviewFrameReady;
+            _recordingBackend.CameraStateChanged += RecordingBackend_OnCameraStateChanged;
+            _coordinator = new RecordingCoordinator(
+                _repository!,
+                _recordingBackend,
+                new NullEventPublisher(),
+                new SystemClock(),
+                _settings.Scanner);
+            _coordinator.StateChanged += Coordinator_OnStateChanged;
+            RebuildStationRouter();
+            BuildCameraPreviewGrid();
+            if (_settings.ShowLivePreview)
+            {
+                await _recordingBackend.StartPreviewAsync(_lifetime.Token);
+            }
+        }
+    }
+
     private void PopulateCameraSourceSelector()
     {
         _updatingCameraSourceSelector = true;
         CameraSourceSelector.Items.Clear();
-        CameraSourceSelector.Items.Add(new CameraSourceChoice("自动选择本地摄像头", CameraSourceKind.AutoLocal));
-        foreach (var camera in WindowsCameraDiscovery.Enumerate())
+        foreach (var choice in CameraQuickSelectionBuilder.Build(
+                     _settings.CameraRig,
+                     WindowsCameraDiscovery.Enumerate()))
         {
-            CameraSourceSelector.Items.Add(new CameraSourceChoice(camera.DisplayName, CameraSourceKind.WindowsCamera, camera.Index));
+            CameraSourceSelector.Items.Add(choice);
         }
-        CameraSourceSelector.Items.Add(new CameraSourceChoice("IPC / 网络视频流", CameraSourceKind.NetworkStream));
-        CameraSourceSelector.Items.Add(new CameraSourceChoice("海康 NVR / DVR", CameraSourceKind.HikvisionRecorder));
-        CameraSourceSelector.DisplayMemberPath = nameof(CameraSourceChoice.Label);
+        CameraSourceSelector.DisplayMemberPath = nameof(CameraQuickSelection.Label);
         SelectCurrentCameraSourceChoice();
         _updatingCameraSourceSelector = false;
     }
@@ -925,55 +1222,129 @@ public partial class MainWindow : Window
     private void SelectCurrentCameraSourceChoice()
     {
         _updatingCameraSourceSelector = true;
-        var choice = CameraSourceSelector.Items.Cast<CameraSourceChoice>().FirstOrDefault(item =>
-            item.Kind == _settings.Camera.SourceKind &&
-            (item.Kind != CameraSourceKind.WindowsCamera || item.CameraIndex == _settings.Camera.CameraIndex));
-        CameraSourceSelector.SelectedItem = choice ?? CameraSourceSelector.Items[0];
+        var choices = CameraSourceSelector.Items.Cast<CameraQuickSelection>();
+        var primary = _settings.CameraRig.PrimaryCamera;
+        var choice = CameraQuickSelectionBuilder.UsesLocalDevicePicker(_settings.CameraRig) && primary is not null
+            ? choices.FirstOrDefault(item => item.IsLocalDevice &&
+                ((!string.IsNullOrWhiteSpace(primary.WindowsSymbolicLink) &&
+                  string.Equals(item.WindowsSymbolicLink, primary.WindowsSymbolicLink, StringComparison.OrdinalIgnoreCase)) ||
+                 (string.IsNullOrWhiteSpace(primary.WindowsSymbolicLink) &&
+                  item.WindowsCameraIndex == primary.LegacyCameraIndex)))
+              ?? choices.FirstOrDefault(item => item.IsAutomaticLocalChoice &&
+                  primary.SourceType == CameraSourceType.AutoLocal)
+              ?? choices.FirstOrDefault()
+            : choices.FirstOrDefault(item =>
+                string.Equals(item.CameraId, _recordingBackend?.SelectedCameraId, StringComparison.OrdinalIgnoreCase))
+              ?? choices.FirstOrDefault();
+        CameraSourceSelector.SelectedItem = choice;
         _updatingCameraSourceSelector = false;
     }
 
     private async void CameraSourceSelector_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_updatingCameraSourceSelector || !IsLoaded ||
-            CameraSourceSelector.SelectedItem is not CameraSourceChoice choice || _recordingBackend is null)
+            CameraSourceSelector.SelectedItem is not CameraQuickSelection choice || _recordingBackend is null)
         {
-            return;
-        }
-        if (_coordinator?.State is RecordingState.Recording or RecordingState.Starting or RecordingState.Saving)
-        {
-            FooterText.Text = "录像过程中不能切换摄像头";
-            SelectCurrentCameraSourceChoice();
-            return;
-        }
-        if (choice.Kind == CameraSourceKind.NetworkStream && string.IsNullOrWhiteSpace(_settings.Camera.NetworkStreamUrl) ||
-            choice.Kind == CameraSourceKind.HikvisionRecorder && string.IsNullOrWhiteSpace(_settings.Camera.HikvisionHost))
-        {
-            SelectCurrentCameraSourceChoice();
-            await OpenSettingsAsync(true);
             return;
         }
 
-        _settings.Camera.SourceKind = choice.Kind;
-        _settings.Camera.AutoSelectBestCamera = choice.Kind == CameraSourceKind.AutoLocal;
-        if (choice.CameraIndex is not null)
+        var recordingActive = _coordinator?.State is
+            RecordingState.Recording or RecordingState.Starting or RecordingState.Saving;
+        var primary = _settings.CameraRig.PrimaryCamera;
+        var switchingLocalDevice = choice.IsLocalDevice && primary is not null &&
+            (!string.Equals(primary.WindowsSymbolicLink, choice.WindowsSymbolicLink, StringComparison.OrdinalIgnoreCase) ||
+             primary.LegacyCameraIndex != choice.WindowsCameraIndex ||
+             primary.SourceType != CameraSourceType.WindowsCamera);
+        var switchingAutomaticLocal = choice.IsAutomaticLocalChoice && primary?.SourceType != CameraSourceType.AutoLocal;
+        var switchingSingleCamera = _settings.CameraRig.Mode == CameraRigMode.SingleCamera &&
+            (switchingLocalDevice || switchingAutomaticLocal ||
+             !string.Equals(choice.CameraId, _recordingBackend.SelectedCameraId, StringComparison.OrdinalIgnoreCase));
+        if (recordingActive && switchingSingleCamera)
         {
-            _settings.Camera.CameraIndex = choice.CameraIndex.Value;
+            SelectCurrentCameraSourceChoice();
+            FooterText.Text = "录像过程中不能切换摄像头，请先停止并保存当前录像";
+            return;
         }
-        await _settingsStore.SaveAsync(_settings, _lifetime.Token);
-        CameraPreviewImage.Source = null;
-        CameraPlaceholder.Visibility = Visibility.Visible;
-        CameraStatusText.Text = "正在切换视频源…";
-        try
+        if (recordingActive)
         {
-            await _recordingBackend.RestartPreviewAsync(_settings.Camera, _lifetime.Token);
-            UpdateCameraRuntimeInfo();
-            FooterText.Text = $"已切换到 {choice.Label}";
+            FooterText.Text = "已切换查看机位；录像配置在录制结束后才能修改";
         }
-        catch (Exception ex)
+
+        if (string.IsNullOrWhiteSpace(choice.CameraId))
         {
-            ShowCameraError(ex.Message);
+            return;
         }
-        ScannerInput.Focus();
+
+        if (switchingSingleCamera)
+        {
+            try
+            {
+                if (choice.IsLocalDevice)
+                {
+                    ApplyLocalCameraQuickSelection(primary, choice);
+                }
+                else if (choice.IsAutomaticLocalChoice)
+                {
+                    ApplyAutomaticLocalQuickSelection(primary);
+                }
+                else if (!_settings.CameraRig.TrySelectSingleCamera(choice.CameraId))
+                {
+                    throw new InvalidOperationException("所选摄像头配置不可用");
+                }
+                await _settingsStore.SaveAsync(_settings, _lifetime.Token);
+                await RecreateCameraBackendAsync();
+                FooterText.Text = $"已切换当前摄像头：{choice.Label}";
+            }
+            catch (Exception ex)
+            {
+                ShowCameraError(ex.Message);
+            }
+            return;
+        }
+
+        _recordingBackend.SelectCamera(choice.CameraId);
+        if (!_cameraPreviewTiles.ContainsKey(choice.CameraId))
+        {
+            _settings.PreviewLayout.CameraIds = CameraPreviewLayoutPlanner.Assign(
+                _settings.PreviewLayout.CameraIds,
+                _settings.PreviewLayout.ViewCount,
+                0,
+                choice.CameraId).ToList();
+            _expandedCameraId = null;
+            BuildCameraPreviewGrid();
+            await _settingsStore.SaveAsync(_settings, _lifetime.Token);
+        }
+        if (!string.Equals(_expandedCameraId, choice.CameraId, StringComparison.OrdinalIgnoreCase))
+        {
+            ToggleExpandedCamera(choice.CameraId);
+        }
+        UpdateCameraRuntimeInfo();
+        FooterText.Text = $"当前画面参数作用于 {choice.Label}";
+    }
+
+    private static void ApplyLocalCameraQuickSelection(CameraProfile? primary, CameraQuickSelection choice)
+    {
+        if (primary is null || choice.WindowsCameraIndex is null || string.IsNullOrWhiteSpace(choice.WindowsSymbolicLink))
+        {
+            throw new InvalidOperationException("所选本地摄像头已不可用，请在设置中刷新设备后重试");
+        }
+
+        primary.SourceType = CameraSourceType.WindowsCamera;
+        primary.LegacyCameraIndex = choice.WindowsCameraIndex.Value;
+        primary.WindowsSymbolicLink = choice.WindowsSymbolicLink;
+        primary.AutoSelectBestCamera = false;
+    }
+
+    private static void ApplyAutomaticLocalQuickSelection(CameraProfile? primary)
+    {
+        if (primary is null)
+        {
+            throw new InvalidOperationException("当前没有可用主机位");
+        }
+
+        primary.SourceType = CameraSourceType.AutoLocal;
+        primary.AutoSelectBestCamera = true;
+        primary.WindowsSymbolicLink = string.Empty;
     }
 
     private void RecentPlayButton_OnClick(object sender, RoutedEventArgs e)
@@ -1008,16 +1379,20 @@ public partial class MainWindow : Window
     private void ApplySettingsVisuals()
     {
         OutputPathText.Text = GetCurrentOutputPath();
-        AutoFocusButton.Content = _settings.Camera.AutoFocus ? "自动聚焦：开" : "自动聚焦：关";
+        var profile = SelectedCameraProfile();
+        AutoFocusButton.Content = profile.AutoFocus ? "自动聚焦：开" : "自动聚焦：关";
         ApplyVoiceVisual();
         FaceZoomButton.Content = _settings.FaceZoomEnabled ? "面单放大：开" : "面单放大：关";
-        CameraPreviewImage.Stretch = _settings.FaceZoomEnabled ? Stretch.UniformToFill : Stretch.Uniform;
-        BrightnessSlider.Value = _settings.Camera.Brightness;
-        ContrastSlider.Value = _settings.Camera.Contrast;
-        SharpnessSlider.Value = _settings.Camera.Sharpness;
-        SaturationSlider.Value = _settings.Camera.Saturation;
-        ResolutionText.Text = $"{_settings.Camera.Width} × {_settings.Camera.Height}";
-        FpsText.Text = $"{_settings.Camera.FramesPerSecond:0.#} fps";
+        foreach (var image in _cameraPreviewImages.Values)
+        {
+            image.Stretch = _settings.FaceZoomEnabled ? Stretch.UniformToFill : Stretch.Uniform;
+        }
+        BrightnessSlider.Value = profile.Brightness;
+        ContrastSlider.Value = profile.Contrast;
+        SharpnessSlider.Value = profile.Sharpness;
+        SaturationSlider.Value = profile.Saturation;
+        ResolutionText.Text = $"{profile.Width} × {profile.Height}";
+        FpsText.Text = $"{profile.FramesPerSecond:0.#} fps";
         if (CameraSourceSelector.Items.Count > 0)
         {
             SelectCurrentCameraSourceChoice();
@@ -1027,137 +1402,10 @@ public partial class MainWindow : Window
         LabelDesigner.ConfigureIssueTags(_settings.IssueTags);
     }
 
-    private async Task ProcessIssueBarcodeAsync(IssueBarcodeMatch match)
-    {
-        if (_coordinator?.State != RecordingState.Recording || _coordinator.CurrentRecord is null ||
-            _repository is null || _recordingBackend is null)
-        {
-            FooterText.Text = "当前没有正在录像的包裹，异常标签未添加";
-            Speak("当前没有正在录像的包裹");
-            return;
-        }
-
-        if (match.Action == IssueBarcodeAction.UndoLastTag)
-        {
-            await UndoLastIssueTagAsync();
-            return;
-        }
-
-        if (match.Tag is null)
-        {
-            return;
-        }
-        var record = _coordinator.CurrentRecord;
-        var alreadyActive = record.Tags.Any(item => item.IsActive &&
-            string.Equals(item.TagId, match.Tag.Id, StringComparison.OrdinalIgnoreCase));
-        await _repository.AddTagAsync(record.Id, match.Tag, DateTimeOffset.Now, "scanner", _lifetime.Token);
-        record.Tags = await _repository.GetTagsAsync(record.Id, false, _lifetime.Token);
-        record.UpdatedAt = DateTimeOffset.Now;
-        await _recordingBackend.UpdateIssueOverlayAsync(record.Id, record.Tags, _lifetime.Token);
-
-        if (!alreadyActive && _settings.CaptureSnapshotOnIssueTag)
-        {
-            try
-            {
-                var snapshot = await _recordingBackend.TakeSnapshotAsync(_lifetime.Token);
-                record.Snapshots = [.. record.Snapshots, snapshot];
-                await _repository.UpdateAsync(record, _lifetime.Token);
-            }
-            catch (Exception ex)
-            {
-                FooterText.Text = $"标签已保存，但自动截图失败：{ex.Message}";
-            }
-        }
-
-        UpdateIssueUi(record);
-        FooterText.Text = alreadyActive ? $"已经标记：{match.Tag.Name}" : $"已标记：{match.Tag.Name}";
-        Speak(alreadyActive ? $"已经标记{match.Tag.Name}" : $"已标记{match.Tag.Name}");
-        ScannerInput.Focus();
-    }
-
-    private async Task UndoLastIssueTagAsync()
-    {
-        if (_coordinator?.CurrentRecord is not { } record || _repository is null || _recordingBackend is null)
-        {
-            return;
-        }
-        var removed = await _repository.UndoLastTagAsync(record.Id, DateTimeOffset.Now, _lifetime.Token);
-        if (removed is null)
-        {
-            FooterText.Text = "当前录像没有可撤销的异常标签";
-            Speak("没有可撤销的异常标签");
-            return;
-        }
-        record.Tags = await _repository.GetTagsAsync(record.Id, false, _lifetime.Token);
-        await _recordingBackend.UpdateIssueOverlayAsync(record.Id, record.Tags, _lifetime.Token);
-        UpdateIssueUi(record);
-        FooterText.Text = $"已撤销标签：{removed.TagName}";
-        Speak($"已撤销{removed.TagName}");
-        ScannerInput.Focus();
-    }
-
-    private void UpdateIssueUi(ScanRecord record)
-    {
-        var active = record.Tags.Where(item => item.IsActive).OrderBy(item => item.TaggedAt).ToArray();
-        ActiveIssueSummaryText.Text = active.Length == 0
-            ? "当前没有异常标签"
-            : $"异常：{string.Join("、", active.Select(item => item.TagName))}";
-        WatermarkIssueText.Text = string.Join("\n", active.Select(item => $"异常：{item.TagName} {item.TaggedAt.LocalDateTime:HH:mm:ss}"));
-        _loadingIssueNote = true;
-        IssueNoteInput.Text = record.Note;
-        _loadingIssueNote = false;
-    }
-
-    private async void QuickIssueTagButton_OnClick(object sender, RoutedEventArgs e)
-    {
-        if ((sender as FrameworkElement)?.Tag is IssueTagDefinition tag)
-        {
-            await ProcessIssueBarcodeAsync(new IssueBarcodeMatch(IssueBarcodeAction.AddTag, tag));
-        }
-    }
-
-    private async void UndoIssueTagButton_OnClick(object sender, RoutedEventArgs e) =>
-        await ProcessIssueBarcodeAsync(new IssueBarcodeMatch(IssueBarcodeAction.UndoLastTag));
-
-    private void IssueNoteInput_OnTextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (_loadingIssueNote || _coordinator?.State != RecordingState.Recording)
-        {
-            return;
-        }
-        _noteSaveTimer.Stop();
-        _noteSaveTimer.Start();
-    }
-
-    private async void SaveNoteTimer_OnTick(object? sender, EventArgs e)
-    {
-        _noteSaveTimer.Stop();
-        await SaveIssueNoteAsync();
-    }
-
-    private async Task FlushIssueNoteAsync()
-    {
-        _noteSaveTimer.Stop();
-        await SaveIssueNoteAsync();
-    }
-
-    private async Task SaveIssueNoteAsync()
-    {
-        if (_coordinator?.CurrentRecord is not { } record || _repository is null || _loadingIssueNote)
-        {
-            return;
-        }
-        var note = IssueNoteInput.Text.Trim();
-        if (string.Equals(note, record.Note, StringComparison.Ordinal))
-        {
-            return;
-        }
-        var now = DateTimeOffset.Now;
-        await _repository.UpdateNoteAsync(record.Id, note, now, _lifetime.Token);
-        record.Note = note;
-        record.NoteUpdatedAt = now;
-        FooterText.Text = "备注已保存";
-    }
+    private CameraProfile SelectedCameraProfile() => _settings.CameraRig.EnabledCameras
+        .FirstOrDefault(camera => string.Equals(camera.Id, _recordingBackend?.SelectedCameraId, StringComparison.OrdinalIgnoreCase))
+        ?? _settings.CameraRig.PrimaryCamera
+        ?? _settings.CameraRig.EnabledCameras.First();
 
     private void RecordingPageButton_OnClick(object sender, RoutedEventArgs e) => ShowDesignerPage(false);
     private void BarcodePageButton_OnClick(object sender, RoutedEventArgs e) => ShowDesignerPage(true);
@@ -1247,74 +1495,6 @@ public partial class MainWindow : Window
         _speech.Speak(message, _settings.VoiceVolume);
     }
 
-    private void RebuildStationRouter()
-    {
-        if (_coordinator is null || _repository is null || _scanCommandLedger is null)
-        {
-            return;
-        }
-        _stationRouter = new StationScanCommandRouter(
-            _coordinator,
-            _repository,
-            new SystemClock(),
-            _settings.Scanner,
-            Environment.MachineName,
-            "excel",
-            _settings.IssueTags,
-            _scanCommandLedger);
-    }
-
-    private async Task<ScanAcknowledgement> RouteMobileCommandAsync(
-        ScanCommand command,
-        CancellationToken cancellationToken)
-    {
-        if (_stationRouter is null)
-        {
-            throw new InvalidOperationException("桌面录像核心尚未就绪");
-        }
-        return await Dispatcher.InvokeAsync(
-            async () =>
-            {
-                var acknowledgement = await _stationRouter.RouteAsync(command, cancellationToken);
-                ApplyMobileCommandAcknowledgement(command, acknowledgement);
-                return acknowledgement;
-            },
-            DispatcherPriority.Normal).Task.Unwrap();
-    }
-
-    private void ApplyMobileCommandAcknowledgement(ScanCommand command, ScanAcknowledgement acknowledgement)
-    {
-        if (command.Mode != DeviceOperatingMode.IssueRemote)
-        {
-            return;
-        }
-
-        if (_coordinator?.CurrentRecord is { } current)
-        {
-            UpdateIssueUi(current);
-        }
-
-        switch (acknowledgement.Action)
-        {
-            case ScanCommandAction.IssueTagged:
-            case ScanCommandAction.IssueUndone:
-            case ScanCommandAction.NoteUpdated:
-            case ScanCommandAction.SnapshotCaptured:
-            case ScanCommandAction.Rejected:
-            case ScanCommandAction.Failed:
-            case ScanCommandAction.Ignored:
-                Speak(acknowledgement.Message);
-                break;
-        }
-    }
-
-    private StationStateSnapshot GetDesktopStationState() => new(
-        Environment.MachineName,
-        _coordinator?.State ?? RecordingState.Idle,
-        _coordinator?.CurrentRecord?.Id,
-        _coordinator?.CurrentRecord?.TrackingNo,
-        DateTimeOffset.Now);
-
     private async void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
         if (_allowClose)
@@ -1362,5 +1542,4 @@ public partial class MainWindow : Window
         Close();
     }
 
-    private sealed record CameraSourceChoice(string Label, CameraSourceKind Kind, int? CameraIndex = null);
 }

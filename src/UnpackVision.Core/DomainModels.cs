@@ -30,6 +30,38 @@ public enum SyncStatus
     Failed
 }
 
+public enum RecordMediaRole
+{
+    Primary,
+    Angle,
+    Composite
+}
+
+public enum MediaIntegrityStatus
+{
+    Complete,
+    Partial,
+    Failed
+}
+
+public sealed class RecordMediaAsset
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RecordId { get; set; }
+    public string CameraId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public RecordMediaRole Role { get; set; }
+    public string VideoPath { get; set; } = string.Empty;
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public double FramesPerSecond { get; set; }
+    public TimeSpan StartOffset { get; set; }
+    public MediaIntegrityStatus Integrity { get; set; } = MediaIntegrityStatus.Complete;
+    public string? FailureReason { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
 public sealed record ScannerProfile
 {
     public string? ScannerDeviceId { get; init; }
@@ -87,6 +119,10 @@ public sealed class ScanRecord
     public string? VideoPath { get; set; }
     public IReadOnlyList<string> Snapshots { get; set; } = [];
     public string? CameraId { get; set; }
+    public MediaIntegrityStatus MediaIntegrity { get; set; } = MediaIntegrityStatus.Complete;
+    public Guid? DefaultMediaAssetId { get; set; }
+    public IReadOnlyList<RecordMediaAsset> MediaAssets { get; set; } = [];
+    public IReadOnlyList<MediaGap> MediaGaps { get; set; } = [];
     public string StationId { get; set; } = Environment.MachineName;
     public Guid? DuplicateOf { get; set; }
     public string PlatformMatchStatus { get; set; } = "待匹配";
@@ -123,10 +159,12 @@ public sealed class ConsentState
 public sealed class DonationProfile
 {
     public string DeveloperName { get; set; } = "五成";
-    public string AlipayQrAsset { get; set; } = string.Empty;
-    public string AlipayQrSha256 { get; set; } = string.Empty;
-    public string WeChatQrAsset { get; set; } = string.Empty;
-    public string WeChatQrSha256 { get; set; } = string.Empty;
+    public string AlipayQrAsset { get; set; } = @"Assets\Donation\alipay.jpg";
+    public string AlipayQrSha256 { get; set; } =
+        "5CB45BCFC0BBCEAEB7ABC600E0BC840BC589185821CF660195E3CA1751DD4364";
+    public string WeChatQrAsset { get; set; } = @"Assets\Donation\wechat.jpg";
+    public string WeChatQrSha256 { get; set; } =
+        "B2967005849581FCA0F329A10D52543BD67728A63911E69B8C245B5A74F0BB2D";
 
     public bool IsConfigured =>
         !string.IsNullOrWhiteSpace(AlipayQrAsset) ||
@@ -158,7 +196,12 @@ public sealed class RecordTagAssignment
 
 public static class IssueTagDefaults
 {
+    public const int CurrentCatalogVersion = 2;
     public const string UndoBarcode = "UV-UNDO-TAG";
+    public const string MissingTagId = "MISSING1";
+    public const string MissingBarcode = "UV-TAG-MISSING1";
+    public const string PurchaseTagId = "PURCHASE";
+    public const string PurchaseBarcode = "UV-TAG-PURCHASE";
 
     public static List<IssueTagDefinition> Create() =>
     [
@@ -177,6 +220,22 @@ public static class IssueTagDefaults
             ColorHex = "#AF52DE",
             BarcodeValue = "UV-TAG-SWAPPED1",
             SortOrder = 1
+        },
+        new()
+        {
+            Id = MissingTagId,
+            Name = "少件",
+            ColorHex = "#FF9500",
+            BarcodeValue = MissingBarcode,
+            SortOrder = 2
+        },
+        new()
+        {
+            Id = PurchaseTagId,
+            Name = "采购",
+            ColorHex = "#007AFF",
+            BarcodeValue = PurchaseBarcode,
+            SortOrder = 3
         }
     ];
 }
@@ -202,7 +261,21 @@ public sealed record RecordingSession(
     DateTimeOffset StartedAt,
     string TemporaryPath);
 
-public sealed record RecordingCompletion(string VideoPath, DateTimeOffset EndedAt);
+public sealed record RecordingCompletion(
+    string VideoPath,
+    DateTimeOffset EndedAt,
+    string? DefaultVideoPath = null,
+    IReadOnlyList<RecordMediaAsset>? MediaAssets = null,
+    IReadOnlyList<MediaGap>? MediaGaps = null,
+    MediaIntegrityStatus MediaIntegrity = MediaIntegrityStatus.Complete)
+{
+    public string EffectiveDefaultVideoPath => string.IsNullOrWhiteSpace(DefaultVideoPath)
+        ? VideoPath
+        : DefaultVideoPath;
+
+    public IReadOnlyList<RecordMediaAsset> EffectiveMediaAssets => MediaAssets ?? [];
+    public IReadOnlyList<MediaGap> EffectiveMediaGaps => MediaGaps ?? [];
+}
 
 public sealed record ParsedRecording(
     string TrackingNo,

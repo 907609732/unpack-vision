@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using UnpackVision.Core;
@@ -7,7 +9,7 @@ using UnpackVision.Infrastructure;
 
 namespace UnpackVision.App;
 
-public sealed class RecentRecordingItem
+public sealed class RecentRecordingItem : INotifyPropertyChanged
 {
     private const int ThumbnailCacheLimit = 64;
     private static readonly ConcurrentDictionary<string, Task<ImageSource?>> ThumbnailCache =
@@ -17,7 +19,7 @@ public sealed class RecentRecordingItem
 
     public required ScanRecord Record { get; init; }
     public SyncDelivery? ExcelDelivery { get; init; }
-    public ImageSource? Thumbnail { get; init; }
+    public ImageSource? Thumbnail { get; private set; }
     public string TrackingNo => Record.TrackingNo;
     public string TimeText => Record.RecordingStartedAt?.ToString("yyyy/MM/dd HH:mm:ss") ?? Record.ScannedAt.ToString("yyyy/MM/dd HH:mm:ss");
     public string DurationText
@@ -68,14 +70,33 @@ public sealed class RecentRecordingItem
         : "—";
     public string NotePreview => string.IsNullOrWhiteSpace(Record.Note) ? "—" : Record.Note;
 
-    public static async Task<RecentRecordingItem> CreateAsync(ScanRecord record, SyncDelivery? excelDelivery = null)
-    {
-        return new RecentRecordingItem
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public static RecentRecordingItem CreateWithoutThumbnail(
+        ScanRecord record,
+        SyncDelivery? excelDelivery = null) =>
+        new()
         {
             Record = record,
-            ExcelDelivery = excelDelivery,
-            Thumbnail = await GetThumbnailAsync(record.VideoPath)
+            ExcelDelivery = excelDelivery
         };
+
+    public static async Task<RecentRecordingItem> CreateAsync(ScanRecord record, SyncDelivery? excelDelivery = null)
+    {
+        var item = CreateWithoutThumbnail(record, excelDelivery);
+        await item.LoadThumbnailAsync();
+        return item;
+    }
+
+    public async Task LoadThumbnailAsync(CancellationToken cancellationToken = default)
+    {
+        var thumbnail = await GetThumbnailAsync(Record.VideoPath).WaitAsync(cancellationToken);
+        if (ReferenceEquals(Thumbnail, thumbnail))
+        {
+            return;
+        }
+        Thumbnail = thumbnail;
+        OnPropertyChanged(nameof(Thumbnail));
     }
 
     private static Task<ImageSource?> GetThumbnailAsync(string? videoPath)
@@ -119,6 +140,9 @@ public sealed class RecentRecordingItem
             ThumbnailCache.TryRemove(oldest, out _);
         }
     }
+
+    private void OnPropertyChanged([CallerMemberName] string? propertyName = null) =>
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
 }
 
 internal static class UiImage

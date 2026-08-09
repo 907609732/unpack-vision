@@ -9,15 +9,26 @@ using Microsoft.Win32;
 using Microsoft.VisualBasic.FileIO;
 using UnpackVision.Core;
 using UnpackVision.Infrastructure;
+using UnpackVision.Infrastructure.Diagnostics;
 
 namespace UnpackVision.App;
 
 public partial class HistoryWindow : Window
 {
+    private const int SourcePageSize = 100;
+    private const int TargetResultsPerLoad = 100;
+    private const int MaximumSourceRowsPerLoad = 500;
     private readonly IScanRecordRepository _repository;
     private readonly LocalSettings _settings;
     private readonly ObservableCollection<RecentRecordingItem> _items = [];
+    private readonly CancellationTokenSource _lifetime = new();
+    private readonly object _thumbnailLoadsSync = new();
+    private readonly List<CancellationTokenSource> _thumbnailLoads = [];
+    private int _nextOffset;
+    private bool _hasMore = true;
+    private bool _loading;
     private bool _deleting;
+    private bool _closed;
 
     public HistoryWindow(IScanRecordRepository repository, LocalSettings settings)
     {
@@ -30,48 +41,130 @@ public partial class HistoryWindow : Window
         TagFilterSelector.SelectedIndex = 0;
         StartDatePicker.SelectedDate = DateTime.Today.AddDays(-30);
         EndDatePicker.SelectedDate = DateTime.Today;
-        Loaded += async (_, _) => await LoadAsync();
+        Loaded += async (_, _) => await LoadAsync(reset: true);
+        Closed += (_, _) =>
+        {
+            _closed = true;
+            _lifetime.Cancel();
+            CancelThumbnailLoads();
+        };
     }
 
-    private async Task LoadAsync()
+    private async Task LoadAsync(bool reset)
     {
+        if (_loading || _closed)
+        {
+            return;
+        }
+
+        _loading = true;
+        SearchButton.IsEnabled = false;
+        LoadMoreButton.IsEnabled = false;
+        var startedAt = Stopwatch.GetTimestamp();
+        var loadMode = reset ? "reset" : "append";
+        using var operation = App.UiWatchdog?.BeginOperation("history.load");
         try
         {
+            if (reset)
+            {
+                _nextOffset = 0;
+                _hasMore = true;
+                HistoryGrid.UnselectAll();
+                _items.Clear();
+                CancelThumbnailLoads();
+            }
+            ResultCountText.Text = reset ? "正在加载记录…" : $"正在继续加载，当前 {_items.Count} 条…";
+            DiagnosticLog.Information("开始加载全部记录，方式 {HistoryLoadMode}", loadMode);
+
             var search = SearchInput.Text.Trim();
-            var records = await _repository.QueryAsync(limit: 500);
             var start = StartDatePicker.SelectedDate?.Date ?? DateTime.MinValue;
             var endExclusive = EndDatePicker.SelectedDate is null
                 ? DateTime.MaxValue
                 : EndDatePicker.SelectedDate.Value.Date.AddDays(1);
             var selectedTag = TagFilterSelector.SelectedItem as IssueTagDefinition;
-            var filtered = records.Where(record =>
-                record.ScannedAt.LocalDateTime >= start && record.ScannedAt.LocalDateTime < endExclusive &&
-                (string.IsNullOrWhiteSpace(search) || record.TrackingNo.Contains(search, StringComparison.CurrentCultureIgnoreCase) || record.Note.Contains(search, StringComparison.CurrentCultureIgnoreCase)) &&
-                (OnlyIssuesCheck.IsChecked != true || record.Tags.Any(tag => tag.IsActive)) &&
-                (string.IsNullOrWhiteSpace(selectedTag?.Id) || record.Tags.Any(tag => tag.IsActive && string.Equals(tag.TagId, selectedTag.Id, StringComparison.OrdinalIgnoreCase))))
-                .ToArray();
-            _items.Clear();
-            foreach (var record in filtered)
+            var onlyIssues = OnlyIssuesCheck.IsChecked == true;
+            var filtered = new List<ScanRecord>();
+            var scannedSourceRows = 0;
+
+            while (_hasMore &&
+                   scannedSourceRows < MaximumSourceRowsPerLoad &&
+                   filtered.Count < TargetResultsPerLoad)
             {
-                var delivery = await _repository.GetDeliveryAsync(record.Id, "excel");
-                _items.Add(await RecentRecordingItem.CreateAsync(record, delivery));
+                var page = await _repository.QueryPageAsync(
+                    null,
+                    _nextOffset,
+                    SourcePageSize,
+                    _lifetime.Token);
+                scannedSourceRows += page.Count;
+                _nextOffset += page.Count;
+                _hasMore = page.Count == SourcePageSize;
+                filtered.AddRange(page.Where(record =>
+                    MatchesFilter(record, search, start, endExclusive, onlyIssues, selectedTag?.Id)));
+                if (page.Count == 0)
+                {
+                    break;
+                }
             }
-            ResultCountText.Text = $"共检索到 {_items.Count} 条结果";
+
+            var deliveries = await _repository.GetLatestDeliveriesAsync(
+                filtered.Select(record => record.Id).ToArray(),
+                "excel",
+                _lifetime.Token);
+            var newItems = filtered
+                .Select(record => RecentRecordingItem.CreateWithoutThumbnail(
+                    record,
+                    deliveries.GetValueOrDefault(record.Id)))
+                .ToArray();
+            foreach (var item in newItems)
+            {
+                _items.Add(item);
+            }
+            StartThumbnailLoading(newItems);
+
+            ResultCountText.Text = _hasMore
+                ? $"已加载 {_items.Count} 条结果，可继续加载"
+                : $"共检索到 {_items.Count} 条结果";
+            LoadMoreButton.Visibility = _hasMore ? Visibility.Visible : Visibility.Collapsed;
             UpdateSelectionState();
+            DiagnosticLog.Information(
+                "全部记录加载完成，方式 {HistoryLoadMode}，扫描 {SourceRowCount} 条，新增显示 {VisibleRowCount} 条，耗时 {ElapsedMilliseconds} 毫秒",
+                loadMode,
+                scannedSourceRows,
+                newItems.Length,
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+        }
+        catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+        {
+            // Closing the window intentionally cancels database and thumbnail work.
         }
         catch (Exception ex)
         {
+            DiagnosticLog.Error(
+                ex,
+                "全部记录加载失败，方式 {HistoryLoadMode}，耗时 {ElapsedMilliseconds} 毫秒",
+                loadMode,
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
             MessageBox.Show(this, ex.Message, "查询失败", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            _loading = false;
+            SearchButton.IsEnabled = !_closed;
+            LoadMoreButton.IsEnabled = !_closed && _hasMore;
         }
     }
 
-    private async void Search_OnClick(object sender, RoutedEventArgs e) => await LoadAsync();
+    private async void Search_OnClick(object sender, RoutedEventArgs e) =>
+        await LoadAsync(reset: true);
+
+    private async void LoadMore_OnClick(object sender, RoutedEventArgs e) =>
+        await LoadAsync(reset: false);
 
     private async void SearchInput_OnKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter)
         {
-            await LoadAsync();
+            await LoadAsync(reset: true);
         }
     }
 
@@ -91,7 +184,55 @@ public partial class HistoryWindow : Window
             MessageBox.Show(this, "录像文件不存在。", "无法打开", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{item.Record.VideoPath}\"") { UseShellExecute = true });
+        try
+        {
+            WindowsFileLocation.SelectFile(item.Record.VideoPath);
+        }
+        catch (Exception exception)
+        {
+            DiagnosticLog.Error(exception, "从全部记录打开录像目录失败");
+            MessageBox.Show(this, "无法打开录像所在目录，请查看诊断日志。", "无法打开",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void OpenExcelFolder_OnClick(object sender, RoutedEventArgs e)
+    {
+        var location = WindowsFileLocation.Resolve(_settings.ExcelWorkbookPath);
+        try
+        {
+            switch (location.State)
+            {
+                case WindowsFileLocationState.FileAvailable:
+                    WindowsFileLocation.SelectFile(location.FullPath!);
+                    DiagnosticLog.Information("用户从全部记录打开 Excel 工作簿目录，工作簿文件存在");
+                    break;
+                case WindowsFileLocationState.DirectoryAvailable:
+                    WindowsFileLocation.OpenDirectory(location.DirectoryPath!);
+                    DiagnosticLog.Warning("用户从全部记录打开 Excel 工作簿目录，但配置的工作簿文件不存在");
+                    MessageBox.Show(this, "配置的 Excel 工作簿不存在，已打开它原本所在的文件夹。",
+                        "工作簿不存在", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    break;
+                case WindowsFileLocationState.NotConfigured:
+                    MessageBox.Show(this, "尚未配置 Excel 工作簿，请先在设置中选择工作簿。",
+                        "尚未配置", MessageBoxButton.OK, MessageBoxImage.Information);
+                    break;
+                case WindowsFileLocationState.InvalidPath:
+                    MessageBox.Show(this, "Excel 工作簿路径无效，请在设置中重新选择工作簿。",
+                        "路径无效", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    break;
+                case WindowsFileLocationState.MissingDirectory:
+                    MessageBox.Show(this, "Excel 工作簿所在文件夹不存在，请在设置中重新选择工作簿。",
+                        "文件夹不存在", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    break;
+            }
+        }
+        catch (Exception exception)
+        {
+            DiagnosticLog.Error(exception, "从全部记录打开 Excel 工作簿目录失败");
+            MessageBox.Show(this, "无法打开 Excel 工作簿所在文件夹，请查看诊断日志。",
+                "无法打开", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private async void EditAnnotation_OnClick(object sender, RoutedEventArgs e)
@@ -133,7 +274,7 @@ public partial class HistoryWindow : Window
             {
                 await _repository.EnqueueDeliveryAsync(updated.Id, "excel");
             }
-            await LoadAsync();
+            await LoadAsync(reset: true);
         }
         catch (Exception ex)
         {
@@ -149,7 +290,18 @@ public partial class HistoryWindow : Window
 
     private void HistoryGrid_OnSelectionChanged(object sender, SelectionChangedEventArgs e) => UpdateSelectionState();
 
+    private void SelectAllRowsCheckBox_OnClick(object sender, RoutedEventArgs e)
+    {
+        ToggleSelectAllLoadedRows();
+        e.Handled = true;
+    }
+
     private void SelectAll_OnClick(object sender, RoutedEventArgs e)
+    {
+        ToggleSelectAllLoadedRows();
+    }
+
+    private void ToggleSelectAllLoadedRows()
     {
         if (_items.Count > 0 && HistoryGrid.SelectedItems.Count == _items.Count)
         {
@@ -159,6 +311,7 @@ public partial class HistoryWindow : Window
         {
             HistoryGrid.SelectAll();
         }
+        UpdateSelectionState();
     }
 
     private async void DeleteSelected_OnClick(object sender, RoutedEventArgs e) => await DeleteSelectedAsync();
@@ -225,7 +378,7 @@ public partial class HistoryWindow : Window
                 }
             }
 
-            await LoadAsync();
+            await LoadAsync(reset: true);
             var message = $"已删除 {deleted} 条记录。";
             if (dialog.DeleteFiles)
             {
@@ -255,6 +408,99 @@ public partial class HistoryWindow : Window
         SelectionCountText.Text = selected == 0 ? "未选择记录" : $"已选择 {selected} 条";
         DeleteSelectedButton.IsEnabled = !_deleting && selected > 0;
         SelectAllButton.Content = _items.Count > 0 && selected == _items.Count ? "取消全选" : "全选";
+        SelectAllRowsCheckBox.IsChecked = selected == 0
+            ? false
+            : selected == _items.Count
+                ? true
+                : null;
+    }
+
+    private static bool MatchesFilter(
+        ScanRecord record,
+        string search,
+        DateTime start,
+        DateTime endExclusive,
+        bool onlyIssues,
+        string? selectedTagId) =>
+        record.ScannedAt.LocalDateTime >= start &&
+        record.ScannedAt.LocalDateTime < endExclusive &&
+        (string.IsNullOrWhiteSpace(search) ||
+         record.TrackingNo.Contains(search, StringComparison.CurrentCultureIgnoreCase) ||
+         record.Note.Contains(search, StringComparison.CurrentCultureIgnoreCase)) &&
+        (!onlyIssues || record.Tags.Any(tag => tag.IsActive)) &&
+        (string.IsNullOrWhiteSpace(selectedTagId) ||
+         record.Tags.Any(tag =>
+             tag.IsActive &&
+             string.Equals(tag.TagId, selectedTagId, StringComparison.OrdinalIgnoreCase)));
+
+    private void StartThumbnailLoading(IReadOnlyList<RecentRecordingItem> items)
+    {
+        if (items.Count == 0 || _closed)
+        {
+            return;
+        }
+
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        lock (_thumbnailLoadsSync)
+        {
+            _thumbnailLoads.Add(cancellation);
+        }
+        _ = LoadThumbnailsAsync(items, cancellation);
+    }
+
+    private async Task LoadThumbnailsAsync(
+        IReadOnlyList<RecentRecordingItem> items,
+        CancellationTokenSource cancellation)
+    {
+        var completed = 0;
+        var startedAt = Stopwatch.GetTimestamp();
+        try
+        {
+            foreach (var item in items)
+            {
+                await item.LoadThumbnailAsync(cancellation.Token);
+                completed++;
+            }
+            DiagnosticLog.Information(
+                "全部记录缩略图后台加载完成，数量 {ThumbnailCount}，耗时 {ElapsedMilliseconds} 毫秒",
+                completed,
+                Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            DiagnosticLog.Information(
+                "全部记录缩略图后台加载已取消，已完成 {ThumbnailCount} 张",
+                completed);
+        }
+        catch (Exception ex)
+        {
+            DiagnosticLog.Warning(
+                ex,
+                "全部记录缩略图后台加载失败，已完成 {ThumbnailCount} 张",
+                completed);
+        }
+        finally
+        {
+            lock (_thumbnailLoadsSync)
+            {
+                _thumbnailLoads.Remove(cancellation);
+            }
+            cancellation.Dispose();
+        }
+    }
+
+    private void CancelThumbnailLoads()
+    {
+        CancellationTokenSource[] active;
+        lock (_thumbnailLoadsSync)
+        {
+            active = [.. _thumbnailLoads];
+            _thumbnailLoads.Clear();
+        }
+        foreach (var cancellation in active)
+        {
+            cancellation.Cancel();
+        }
     }
 
     private static IEnumerable<string> EnumerateRecordFiles(ScanRecord record)
