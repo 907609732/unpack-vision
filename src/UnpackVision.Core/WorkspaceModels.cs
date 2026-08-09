@@ -43,6 +43,10 @@ public sealed class PortableScanRecord
     public DateTimeOffset? RecordingStartedAt { get; set; }
     public DateTimeOffset? RecordingEndedAt { get; set; }
     public string? RelativeVideoPath { get; set; }
+    public MediaIntegrityStatus MediaIntegrity { get; set; } = MediaIntegrityStatus.Complete;
+    public Guid? DefaultMediaAssetId { get; set; }
+    public IReadOnlyList<PortableMediaAsset> MediaAssets { get; set; } = [];
+    public IReadOnlyList<MediaGap> MediaGaps { get; set; } = [];
     public IReadOnlyList<string> RelativeSnapshots { get; set; } = [];
     public string? CameraId { get; set; }
     public string StationId { get; set; } = string.Empty;
@@ -53,6 +57,23 @@ public sealed class PortableScanRecord
     public IReadOnlyList<RecordTagAssignment> Tags { get; set; } = [];
     public string? FailureReason { get; set; }
     public string? ExcelSyncStatus { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
+public sealed class PortableMediaAsset
+{
+    public Guid Id { get; set; }
+    public string CameraId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public RecordMediaRole Role { get; set; }
+    public string RelativeVideoPath { get; set; } = string.Empty;
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public double FramesPerSecond { get; set; }
+    public long StartOffsetMilliseconds { get; set; }
+    public MediaIntegrityStatus Integrity { get; set; } = MediaIntegrityStatus.Complete;
+    public string? FailureReason { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
 }

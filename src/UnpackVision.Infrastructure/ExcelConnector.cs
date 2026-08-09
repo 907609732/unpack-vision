@@ -483,7 +483,7 @@ public sealed class ExcelConnector : ISyncConnector
         }
     }
 
-    internal static string BuildAnnotation(ScanRecord record)
+    public static string BuildAnnotation(ScanRecord record)
     {
         var tags = record.Tags.Where(item => item.IsActive).OrderBy(item => item.TaggedAt)
             .Select(item => item.TagName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -495,6 +495,18 @@ public sealed class ExcelConnector : ISyncConnector
         if (!string.IsNullOrWhiteSpace(record.Note))
         {
             parts.Add($"备注：{record.Note.Trim().Replace("\r", " ").Replace("\n", " ")}");
+        }
+        if (record.MediaIntegrity == MediaIntegrityStatus.Partial)
+        {
+            var incomplete = record.MediaAssets
+                .Where(asset => asset.Integrity != MediaIntegrityStatus.Complete)
+                .Select(asset => asset.DisplayName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            parts.Add(incomplete.Length == 0
+                ? "多机位不完整"
+                : $"多机位不完整：{string.Join('、', incomplete)}");
         }
         return AnnotationPrefix + string.Join("；", parts);
     }

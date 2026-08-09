@@ -46,6 +46,8 @@ internal static class SqliteRecordMapping
         command.Parameters.AddWithValue("$platformMatchStatus", record.PlatformMatchStatus);
         command.Parameters.AddWithValue("$note", record.Note ?? string.Empty);
         command.Parameters.AddWithValue("$noteUpdatedAt", Db(record.NoteUpdatedAt));
+        command.Parameters.AddWithValue("$mediaIntegrity", record.MediaIntegrity.ToString());
+        command.Parameters.AddWithValue("$defaultMediaAssetId", Db(record.DefaultMediaAssetId?.ToString("D")));
         command.Parameters.AddWithValue("$failureReason", Db(record.FailureReason));
         command.Parameters.AddWithValue("$createdAt", Format(record.CreatedAt));
         command.Parameters.AddWithValue("$updatedAt", Format(record.UpdatedAt));
@@ -68,6 +70,10 @@ internal static class SqliteRecordMapping
         PlatformMatchStatus = reader.GetString(reader.GetOrdinal("platform_match_status")),
         Note = reader.GetString(reader.GetOrdinal("note")),
         NoteUpdatedAt = ReadDate(reader, "note_updated_at"),
+        MediaIntegrity = Enum.TryParse<MediaIntegrityStatus>(ReadString(reader, "media_integrity"), out var integrity)
+            ? integrity
+            : MediaIntegrityStatus.Complete,
+        DefaultMediaAssetId = ReadGuid(reader, "default_media_asset_id"),
         FailureReason = ReadString(reader, "failure_reason"),
         CreatedAt = Parse(reader.GetString(reader.GetOrdinal("created_at"))),
         UpdatedAt = Parse(reader.GetString(reader.GetOrdinal("updated_at")))
@@ -97,6 +103,37 @@ internal static class SqliteRecordMapping
         NextRetryAt = Parse(reader.GetString(reader.GetOrdinal("next_retry_at"))),
         CreatedAt = Parse(reader.GetString(reader.GetOrdinal("created_at"))),
         UpdatedAt = Parse(reader.GetString(reader.GetOrdinal("updated_at")))
+    };
+
+    internal static RecordMediaAsset ReadMediaAsset(SqliteDataReader reader) => new()
+    {
+        Id = Guid.Parse(reader.GetString(reader.GetOrdinal("id"))),
+        RecordId = Guid.Parse(reader.GetString(reader.GetOrdinal("record_id"))),
+        CameraId = reader.GetString(reader.GetOrdinal("camera_id")),
+        DisplayName = reader.GetString(reader.GetOrdinal("display_name")),
+        Role = Enum.Parse<RecordMediaRole>(reader.GetString(reader.GetOrdinal("role"))),
+        VideoPath = reader.GetString(reader.GetOrdinal("video_path")),
+        Width = reader.GetInt32(reader.GetOrdinal("width")),
+        Height = reader.GetInt32(reader.GetOrdinal("height")),
+        FramesPerSecond = reader.GetDouble(reader.GetOrdinal("frames_per_second")),
+        StartOffset = TimeSpan.FromMilliseconds(reader.GetInt64(reader.GetOrdinal("start_offset_ms"))),
+        Integrity = Enum.Parse<MediaIntegrityStatus>(reader.GetString(reader.GetOrdinal("integrity"))),
+        FailureReason = ReadString(reader, "failure_reason"),
+        CreatedAt = Parse(reader.GetString(reader.GetOrdinal("created_at"))),
+        UpdatedAt = Parse(reader.GetString(reader.GetOrdinal("updated_at")))
+    };
+
+    internal static MediaGap ReadMediaGap(SqliteDataReader reader) => new()
+    {
+        Id = Guid.Parse(reader.GetString(reader.GetOrdinal("id"))),
+        RecordId = Guid.Parse(reader.GetString(reader.GetOrdinal("record_id"))),
+        MediaAssetId = ReadGuid(reader, "media_asset_id"),
+        CameraId = reader.GetString(reader.GetOrdinal("camera_id")),
+        StartedAt = Parse(reader.GetString(reader.GetOrdinal("started_at"))),
+        EndedAt = Parse(reader.GetString(reader.GetOrdinal("ended_at"))),
+        Recovered = reader.GetInt32(reader.GetOrdinal("recovered")) != 0,
+        RecoveryPath = ReadString(reader, "recovery_path"),
+        Reason = reader.GetString(reader.GetOrdinal("reason"))
     };
 
     internal static object Db(string? value) => (object?)value ?? DBNull.Value;

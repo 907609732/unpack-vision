@@ -209,7 +209,20 @@ internal static class StationHostEndpointSupport
             hasVideo,
             videoBytes,
             record.Snapshots.Any(File.Exists),
-            record.UpdatedAt);
+            record.UpdatedAt,
+            record.MediaIntegrity,
+            record.DefaultMediaAssetId,
+            record.MediaAssets.Select(asset => new StationMediaAssetView(
+                asset.Id,
+                asset.CameraId,
+                asset.DisplayName,
+                asset.Role,
+                asset.Width,
+                asset.Height,
+                asset.FramesPerSecond,
+                (long)asset.StartOffset.TotalMilliseconds,
+                asset.Integrity,
+                File.Exists(asset.VideoPath))).ToArray());
     }
 
     internal static IReadOnlyList<StationRecordEvent> BuildRecordEvents(

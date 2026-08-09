@@ -37,7 +37,12 @@ Windows 端使用 Velopack 每用户安装器，后续更新由软件后台下�
 
 ## 隐私、安全、迁移与安卓协同
 
-当前 2.3.2 已包含可运行的局域网协同主链路与公开发布安全加固：
+当前 2.4.0 在局域网协同主链路与公开发布安全加固基础上增加四机位同步录像：
+
+- 最多同时启用4个USB、虚拟、手机、IPC或海康录像机通道。
+- 同时保存各机位原片和1080p合成视频，历史播放器可保持时间位置切换角度。
+- 主机位为必需机位；副机位断线会写占位帧、自动重连并形成可审计媒体缺口。
+- 旧版 `VideoPath`、Excel格式、录像目录和API继续表示主机位，不破坏已有集成。
 
 - 新增常驻用户会话的 `UnpackVision.StationHost`，统一接收电脑、手机和未来网站的扫码命令。
 - 新增幂等 `IScanCommandRouter`；命令回执按幂等键保存在 SQLite，工位主机重启后重复事件仍返回原结果。手机扫码器可选择是否触发录像，关闭时可靠追加 Excel。
@@ -155,6 +160,15 @@ X-UnpackVision-Key: <本机 API 密钥>
 
 `settings.json` 保存扫码规则、异常条码、最大录像分钟数和工作模式。单号在 SQLite 中始终按文本保存，保留字母、横线和前导零。
 
+## 安全卸载
+
+正式安装版会显示在 Windows“设置 → 应用 → 已安装的应用”中。推荐使用软件内“设置 → 关于 → 卸载与数据保留 → 安全卸载拆包智录”：
+
+- 默认只删除程序、快捷方式和卸载注册项，保留数据库、设置、配对信息、录像和 Excel。
+- 选择永久清理会连续警告两次，并验证录像目录中的 `.unpackvision/workspace.json` 与当前工作区 ID；验证失败时拒绝删除。
+- 永久清理只处理 `Unpacking`、`Packing`、`Snapshots`、`.unpackvision` 和 `%LOCALAPPDATA%\UnpackVision`，Excel 及录像目录里的其他文件始终保留。
+- 直接从 Windows 设置卸载时不会取得删除业务数据的授权，因此默认保留所有业务数据。
+
 ## 构建、测试和发布
 
 ```powershell
@@ -184,12 +198,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\fetch-mediamtx.ps1
 
 发布结果保存在 `artifacts\release-output`。Windows 安装器把桌面端、`StationHost`、兼容同步服务和带许可证的 MediaMTX 作为同一版本整体更新；安卓端生成固定文件名 APK、更新清单和 SHA256。
 
-生成完整 2.3.2 发布文件：
+生成完整 2.4.0 预发布文件：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-signed-android.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1 `
-  -Version 2.3.2 `
+  -Version 2.4.0 `
   -AndroidApk .\mobile\UnpackVision.Android\app\build\outputs\apk\release\app-release.apk
 ```
 
@@ -205,8 +219,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1 `
 - [隐私政策](docs/PRIVACY.md)
 - [安全报告与漏洞披露](SECURITY.md)
 - [2.3.0 上线前安全与发布验证记录](docs/SECURITY-AUDIT-2.3.0.md)
+- [2.4.0 预发布验证记录](docs/SECURITY-AUDIT-2.4.0.md)
 - [2.3.0 发布说明](docs/releases/2.3.0.md)
 - [2.3.2 发布说明](docs/releases/2.3.2.md)
+- [2.4.0 发布说明](docs/releases/2.4.0.md)
 
 ## Code signing policy
 

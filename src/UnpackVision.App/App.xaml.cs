@@ -17,6 +17,9 @@ public partial class App : System.Windows.Application
     internal static UiHangWatchdog? UiWatchdog { get; private set; }
     private static readonly Lazy<DesktopUpdateService> UpdateService = new(() => new DesktopUpdateService());
     internal static DesktopUpdateService Updates => UpdateService.Value;
+    private static readonly Lazy<IHikvisionChannelDiscoveryService> HikvisionDiscoveryService =
+        new(() => new HikvisionChannelDiscoveryService());
+    internal static IHikvisionChannelDiscoveryService HikvisionDiscovery => HikvisionDiscoveryService.Value;
     private static readonly HttpClient TelemetryHttpClient = new()
     {
         Timeout = TimeSpan.FromSeconds(3)

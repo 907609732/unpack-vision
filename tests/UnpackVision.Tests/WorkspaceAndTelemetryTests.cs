@@ -211,6 +211,52 @@ public sealed class WorkspaceAndTelemetryTests
     }
 
     [Fact]
+    public async Task RecordingRootMigration_CopiesVideosAndPortableIndexWithoutDeletingSource()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var source = Path.Combine(root, "old-recordings");
+            var target = Path.Combine(root, "new-recordings");
+            var unpackingVideo = Path.Combine(source, "Unpacking", "first.mp4");
+            var packingVideo = Path.Combine(source, "Packing", "second.avi");
+            var portableManifest = Path.Combine(source, ".unpackvision", "workspace.json");
+            var snapshot = Path.Combine(source, "Snapshots", "20260808", "damage.jpg");
+            var incomplete = Path.Combine(source, "Unpacking", "active.partial.mp4");
+            await WriteFileAsync(unpackingVideo, [1, 2, 3, 4]);
+            await WriteFileAsync(packingVideo, [5, 6, 7]);
+            await WriteFileAsync(portableManifest, "{\"workspaceId\":\"00000000-0000-0000-0000-000000000001\"}");
+            await WriteFileAsync(snapshot, [10, 11, 12]);
+            await WriteFileAsync(incomplete, [8, 9]);
+            await WriteFileAsync(Path.Combine(source, "merchant-note.txt"), "leave this out");
+
+            var service = new RecordingRootMigrationService();
+            var preview = await service.PreviewAsync(source, target);
+            var progressReports = new List<RecordingRootMigrationProgress>();
+            var result = await service.MigrateAsync(preview, new CaptureProgress<RecordingRootMigrationProgress>(progressReports));
+
+            Assert.Equal(4, preview.FileCount);
+            Assert.Equal(4, result.CopiedFiles);
+            Assert.True(File.Exists(unpackingVideo));
+            Assert.True(File.Exists(Path.Combine(target, "Unpacking", "first.mp4")));
+            Assert.True(File.Exists(Path.Combine(target, "Packing", "second.avi")));
+            Assert.True(File.Exists(Path.Combine(target, ".unpackvision", "workspace.json")));
+            Assert.True(File.Exists(Path.Combine(target, "Snapshots", "20260808", "damage.jpg")));
+            Assert.False(File.Exists(Path.Combine(target, "Unpacking", "active.partial.mp4")));
+            Assert.False(File.Exists(Path.Combine(target, "merchant-note.txt")));
+            Assert.True(File.Exists(result.ReportPath));
+            var finalProgress = progressReports[^1];
+            Assert.Equal(preview.FileCount, finalProgress.CompletedFiles);
+            Assert.Equal(preview.TotalBytes, finalProgress.CompletedBytes);
+            Assert.Equal(preview.TotalBytes, finalProgress.TotalBytes);
+        }
+        finally
+        {
+            await DeleteDirectoryWithRetryAsync(root);
+        }
+    }
+
+    [Fact]
     public async Task AnonymousTelemetry_SendsOnlyOncePerBeijingDay()
     {
         var root = CreateTempDirectory();
@@ -249,6 +295,23 @@ public sealed class WorkspaceAndTelemetryTests
         var path = Path.Combine(Path.GetTempPath(), "UnpackVisionTests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static async Task WriteFileAsync(string path, byte[] bytes)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllBytesAsync(path, bytes);
+    }
+
+    private sealed class CaptureProgress<T>(ICollection<T> values) : IProgress<T>
+    {
+        public void Report(T value) => values.Add(value);
+    }
+
+    private static async Task WriteFileAsync(string path, string contents)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, contents);
     }
 
     private static async Task DeleteDirectoryWithRetryAsync(string path)

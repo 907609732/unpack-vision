@@ -19,6 +19,18 @@
         </StackPanel>
       </Grid>
     </Border>
+    <Border VerticalAlignment="Top" Margin="0,52,0,0" Background="#8A0A0C12" Padding="16,8">
+      <ItemsControl x:Name="CameraAnglesControl">
+        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Button Tag="{Binding}" Click="CameraAngle_OnClick" Padding="12,6" Margin="0,0,8,0">
+              <TextBlock Foreground="White"><Run Text="{Binding DisplayName}"/><Run Text=" · "/><Run Text="{Binding Integrity}"/></TextBlock>
+            </Button>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+    </Border>
     <Border VerticalAlignment="Bottom" Background="#CC090B10" Padding="18,12">
       <Grid>
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>

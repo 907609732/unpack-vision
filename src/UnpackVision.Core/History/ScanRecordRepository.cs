@@ -16,6 +16,16 @@ public interface IScanRecordRepository
     Task<ScanRecord?> GetAsync(Guid id, CancellationToken cancellationToken = default);
     Task<ScanRecord?> FindFirstCompletedAsync(string trackingNo, CancellationToken cancellationToken = default);
     Task<ScanRecord?> FindByVideoPathAsync(string videoPath, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<RecordMediaAsset>> GetMediaAssetsAsync(
+        Guid recordId,
+        CancellationToken cancellationToken = default);
+    Task<RecordMediaAsset?> GetMediaAssetAsync(
+        Guid recordId,
+        Guid assetId,
+        CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<MediaGap>> GetMediaGapsAsync(
+        Guid recordId,
+        CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ScanRecord>> QueryAsync(
         string? trackingNo = null,
         int limit = 200,

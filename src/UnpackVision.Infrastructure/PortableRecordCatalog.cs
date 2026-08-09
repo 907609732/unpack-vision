@@ -74,6 +74,25 @@ public sealed class PortableRecordCatalog : IPortableRecordCatalog
             RecordingStartedAt = record.RecordingStartedAt,
             RecordingEndedAt = record.RecordingEndedAt,
             RelativeVideoPath = ToRelativePath(record.VideoPath),
+            MediaIntegrity = record.MediaIntegrity,
+            DefaultMediaAssetId = record.DefaultMediaAssetId,
+            MediaAssets = record.MediaAssets.Select(asset => new PortableMediaAsset
+            {
+                Id = asset.Id,
+                CameraId = asset.CameraId,
+                DisplayName = asset.DisplayName,
+                Role = asset.Role,
+                RelativeVideoPath = ToRelativePath(asset.VideoPath) ?? string.Empty,
+                Width = asset.Width,
+                Height = asset.Height,
+                FramesPerSecond = asset.FramesPerSecond,
+                StartOffsetMilliseconds = (long)asset.StartOffset.TotalMilliseconds,
+                Integrity = asset.Integrity,
+                FailureReason = asset.FailureReason,
+                CreatedAt = asset.CreatedAt,
+                UpdatedAt = asset.UpdatedAt
+            }).Where(asset => !string.IsNullOrWhiteSpace(asset.RelativeVideoPath)).ToArray(),
+            MediaGaps = record.MediaGaps.ToArray(),
             RelativeSnapshots = record.Snapshots
                 .Select(ToRelativePath)
                 .Where(path => !string.IsNullOrWhiteSpace(path))

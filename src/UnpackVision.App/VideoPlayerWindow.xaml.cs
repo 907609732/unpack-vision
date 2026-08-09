@@ -12,15 +12,29 @@ public partial class VideoPlayerWindow : Window
     private bool _playing = true;
     private bool _seeking;
     private readonly ScanRecord _record;
+    private RecordMediaAsset _currentAsset;
 
     public VideoPlayerWindow(ScanRecord record)
     {
         InitializeComponent();
         _record = record;
-        var videoPath = record.VideoPath ?? throw new ArgumentException("录像路径为空。", nameof(record));
+        var assets = record.MediaAssets.Where(asset => File.Exists(asset.VideoPath)).ToArray();
+        _currentAsset = assets.FirstOrDefault(asset => asset.Id == record.DefaultMediaAssetId)
+            ?? assets.FirstOrDefault(asset => asset.Role == RecordMediaRole.Composite)
+            ?? assets.FirstOrDefault(asset => asset.Role == RecordMediaRole.Primary)
+            ?? new RecordMediaAsset
+            {
+                RecordId = record.Id,
+                CameraId = record.CameraId ?? "legacy-primary",
+                DisplayName = "主机位",
+                Role = RecordMediaRole.Primary,
+                VideoPath = record.VideoPath ?? throw new ArgumentException("录像路径为空。", nameof(record))
+            };
+        var videoPath = _currentAsset.VideoPath;
         Title = Path.GetFileName(videoPath);
         TitleText.Text = Path.GetFileName(videoPath);
         Player.Source = new Uri(videoPath, UriKind.Absolute);
+        CameraAnglesControl.ItemsSource = assets.Length == 0 ? [_currentAsset] : assets;
         IssueTimelineControl.ItemsSource = record.Tags.Where(tag => tag.IsActive).OrderBy(tag => tag.TaggedAt).ToArray();
         _timer = new DispatcherTimer(TimeSpan.FromMilliseconds(250), DispatcherPriority.Normal, Timer_OnTick, Dispatcher);
         Loaded += (_, _) =>
@@ -33,6 +47,22 @@ public partial class VideoPlayerWindow : Window
             _timer.Stop();
             Player.Stop();
         };
+    }
+
+    private void CameraAngle_OnClick(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not RecordMediaAsset asset || !File.Exists(asset.VideoPath)) return;
+        var absolutePosition = Player.Position + _currentAsset.StartOffset;
+        var target = absolutePosition - asset.StartOffset;
+        if (target < TimeSpan.Zero) target = TimeSpan.Zero;
+        var wasPlaying = _playing;
+        Player.Stop();
+        _currentAsset = asset;
+        Player.Source = new Uri(asset.VideoPath, UriKind.Absolute);
+        Title = Path.GetFileName(asset.VideoPath);
+        TitleText.Text = Path.GetFileName(asset.VideoPath);
+        Player.Position = target;
+        if (wasPlaying) Player.Play(); else Player.Pause();
     }
 
     private void Player_OnMediaOpened(object sender, RoutedEventArgs e)

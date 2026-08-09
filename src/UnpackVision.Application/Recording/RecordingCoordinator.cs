@@ -287,8 +287,21 @@ public sealed class RecordingCoordinator
             record.State = RecordingState.Completed;
             record.RecordingEndedAt = completion.EndedAt;
             record.VideoPath = completion.VideoPath;
+            record.MediaAssets = completion.EffectiveMediaAssets;
+            record.MediaGaps = completion.EffectiveMediaGaps;
+            record.MediaIntegrity = completion.MediaIntegrity;
+            record.DefaultMediaAssetId = completion.EffectiveMediaAssets
+                .FirstOrDefault(asset => string.Equals(asset.VideoPath, completion.EffectiveDefaultVideoPath, StringComparison.OrdinalIgnoreCase))?.Id
+                ?? completion.EffectiveMediaAssets.FirstOrDefault(asset => asset.Role == RecordMediaRole.Composite)?.Id
+                ?? completion.EffectiveMediaAssets.FirstOrDefault()?.Id;
+            record.CameraId = completion.EffectiveMediaAssets.FirstOrDefault(asset => asset.Role == RecordMediaRole.Primary)?.CameraId
+                ?? record.CameraId;
             record.UpdatedAt = _clock.Now;
             await _repository.CompleteAndEnqueueAsync(record, _connectorId, cancellationToken);
+            if (completion.MediaIntegrity == MediaIntegrityStatus.Partial)
+            {
+                await _eventPublisher.PublishAsync("record.media_partial", record, cancellationToken);
+            }
             await _eventPublisher.PublishAsync("record.completed", record, cancellationToken);
             return Notify(new ScanResult(ScanAction.Stopped, "录像已保存", record));
         }

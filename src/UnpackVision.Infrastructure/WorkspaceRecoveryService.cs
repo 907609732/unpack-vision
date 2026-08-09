@@ -177,6 +177,39 @@ public sealed partial class WorkspaceRecoveryService(
     private ScanRecord ToScanRecord(PortableScanRecord portable)
     {
         var root = Path.GetFullPath(storageOptions.RecordingRoot);
+        var primaryPath = ResolveRelative(root, portable.RelativeVideoPath);
+        var assets = portable.MediaAssets.Select(asset => new RecordMediaAsset
+        {
+            Id = asset.Id == Guid.Empty ? DeterministicGuid($"{portable.Id:D}|{asset.CameraId}|{asset.Role}") : asset.Id,
+            RecordId = portable.Id,
+            CameraId = asset.CameraId,
+            DisplayName = asset.DisplayName,
+            Role = asset.Role,
+            VideoPath = ResolveRelative(root, asset.RelativeVideoPath) ?? string.Empty,
+            Width = asset.Width,
+            Height = asset.Height,
+            FramesPerSecond = asset.FramesPerSecond,
+            StartOffset = TimeSpan.FromMilliseconds(asset.StartOffsetMilliseconds),
+            Integrity = asset.Integrity,
+            FailureReason = asset.FailureReason,
+            CreatedAt = asset.CreatedAt,
+            UpdatedAt = asset.UpdatedAt
+        }).Where(asset => !string.IsNullOrWhiteSpace(asset.VideoPath)).ToList();
+        if (assets.Count == 0 && !string.IsNullOrWhiteSpace(primaryPath))
+        {
+            assets.Add(new RecordMediaAsset
+            {
+                Id = DeterministicGuid($"{portable.Id:D}|primary"),
+                RecordId = portable.Id,
+                CameraId = portable.CameraId ?? "legacy-primary",
+                DisplayName = "主机位",
+                Role = RecordMediaRole.Primary,
+                VideoPath = primaryPath,
+                Integrity = portable.MediaIntegrity,
+                CreatedAt = portable.CreatedAt,
+                UpdatedAt = portable.UpdatedAt
+            });
+        }
         return new ScanRecord
         {
             Id = portable.Id,
@@ -186,13 +219,28 @@ public sealed partial class WorkspaceRecoveryService(
             ScannedAt = portable.ScannedAt,
             RecordingStartedAt = portable.RecordingStartedAt,
             RecordingEndedAt = portable.RecordingEndedAt,
-            VideoPath = ResolveRelative(root, portable.RelativeVideoPath),
+            VideoPath = primaryPath,
             Snapshots = portable.RelativeSnapshots
                 .Select(path => ResolveRelative(root, path))
                 .Where(path => path is not null)
                 .Cast<string>()
                 .ToArray(),
             CameraId = portable.CameraId,
+            MediaIntegrity = portable.MediaIntegrity,
+            DefaultMediaAssetId = portable.DefaultMediaAssetId ?? assets.FirstOrDefault(asset => asset.Role == RecordMediaRole.Composite)?.Id ?? assets.FirstOrDefault()?.Id,
+            MediaAssets = assets,
+            MediaGaps = portable.MediaGaps.Select(gap => new MediaGap
+            {
+                Id = gap.Id,
+                RecordId = portable.Id,
+                MediaAssetId = gap.MediaAssetId,
+                CameraId = gap.CameraId,
+                StartedAt = gap.StartedAt,
+                EndedAt = gap.EndedAt,
+                Recovered = gap.Recovered,
+                RecoveryPath = gap.RecoveryPath,
+                Reason = gap.Reason
+            }).ToArray(),
             StationId = portable.StationId,
             DuplicateOf = portable.DuplicateOf,
             PlatformMatchStatus = portable.PlatformMatchStatus,

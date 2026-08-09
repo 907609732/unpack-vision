@@ -135,9 +135,9 @@
           <Border Background="#FCFCFD" BorderBrush="#23000000" BorderThickness="1" CornerRadius="13" Padding="2">
             <StackPanel Orientation="Horizontal">
               <TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="15" Margin="10,0,4,0" VerticalAlignment="Center" />
-              <ComboBox x:Name="CameraSourceSelector" Width="196" Height="36" Padding="5,4" BorderThickness="0"
+              <ComboBox x:Name="CameraSourceSelector" Width="236" Height="36" Padding="5,4" BorderThickness="0"
                         Background="Transparent" SelectionChanged="CameraSourceSelector_OnSelectionChanged"
-                        ToolTip="录像空闲时可快速切换摄像头来源" />
+                        ToolTip="录像空闲时可快速切换本地摄像头或机位" />
             </StackPanel>
           </Border>
           <Ellipse Width="8" Height="8" Fill="#34C759" Margin="15,0,8,0" />
@@ -148,6 +148,21 @@
           <TextBlock x:Name="FpsText" Text="15 fps" Foreground="#7C7C82" VerticalAlignment="Center" />
         </StackPanel>
         <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+          <Border Background="#F2F5F9" BorderBrush="#18000000" BorderThickness="1"
+                  CornerRadius="11" Padding="4,3" Margin="0,0,7,0">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="视图" Foreground="#686D75" FontSize="11.5"
+                         Margin="6,0,5,0" VerticalAlignment="Center" />
+              <Button x:Name="PreviewLayout1Button" Content="1" Width="28" Height="28" Padding="0"
+                      ToolTip="单画面" Click="PreviewLayoutButton_OnClick" Tag="1" />
+              <Button x:Name="PreviewLayout2Button" Content="2" Width="28" Height="28" Padding="0"
+                      ToolTip="双画面" Click="PreviewLayoutButton_OnClick" Tag="2" Margin="2,0,0,0" />
+              <Button x:Name="PreviewLayout3Button" Content="3" Width="28" Height="28" Padding="0"
+                      ToolTip="三画面：主画面在左" Click="PreviewLayoutButton_OnClick" Tag="3" Margin="2,0,0,0" />
+              <Button x:Name="PreviewLayout4Button" Content="4" Width="28" Height="28" Padding="0"
+                      ToolTip="四画面" Click="PreviewLayoutButton_OnClick" Tag="4" Margin="2,0,0,0" />
+            </StackPanel>
+          </Border>
           <Button x:Name="ImageAdjustButton" Style="{StaticResource ToolbarButton}" Click="ImageAdjustButton_OnClick">
             <StackPanel Orientation="Horizontal"><TextBlock Text="&#xE9E9;" FontFamily="Segoe Fluent Icons" /><TextBlock Text="画面" Margin="7,0,0,0" /></StackPanel>
           </Button>
@@ -176,7 +191,8 @@
 
         <Border x:Name="PreviewBorder" Background="#121418" CornerRadius="22" ClipToBounds="True" Effect="{StaticResource PanelShadow}">
           <Grid>
-            <Image x:Name="CameraPreviewImage" Stretch="Uniform" RenderOptions.BitmapScalingMode="LowQuality" />
+            <Grid x:Name="CameraPreviewGrid" Background="#121418" MouseLeftButtonUp="CameraPreviewGrid_OnMouseLeftButtonUp" />
+            <Image x:Name="CameraPreviewImage" Visibility="Collapsed" Stretch="Uniform" RenderOptions.BitmapScalingMode="LowQuality" />
             <StackPanel x:Name="CameraPlaceholder" HorizontalAlignment="Center" VerticalAlignment="Center">
               <TextBlock Text="&#xE722;" FontFamily="Segoe Fluent Icons" FontSize="40" Foreground="#50545C" HorizontalAlignment="Center" />
               <TextBlock Text="正在连接实时相机…" Foreground="#D0D2D7" FontSize="16" Margin="0,12,0,0" HorizontalAlignment="Center" />
@@ -219,6 +235,7 @@
                     Margin="0,0,0,18" Effect="{StaticResource FloatingShadow}">
               <StackPanel Orientation="Horizontal">
                 <Button Style="{StaticResource GlassButton}" BorderThickness="0" Click="SnapshotButton_OnClick" Content="拍照" />
+                <Button Style="{StaticResource GlassButton}" BorderThickness="0" Click="SnapshotAllButton_OnClick" Content="全部拍照" />
                 <Button Style="{StaticResource GlassButton}" BorderThickness="0" Click="RotateLeftButton_OnClick" Content="左转" />
                 <Button Style="{StaticResource GlassButton}" BorderThickness="0" Click="RotateRightButton_OnClick" Content="右转" />
                 <Button Style="{StaticResource GlassButton}" BorderThickness="0" Click="MirrorButton_OnClick" Content="镜像" />
@@ -398,7 +415,7 @@
                  KeyDown="ScannerInput_OnKeyDown" />
         <TextBox x:Name="SyncStatusText" Text="Excel：等待任务" Style="{StaticResource SelectableText}" Foreground="#8C8C91" FontSize="10"
                    VerticalAlignment="Center" Margin="12,0,0,0" />
-        <TextBlock Text="版本 2.3.2 · 开发者 五成" Foreground="#A0A0A5" FontSize="10" VerticalAlignment="Center" Margin="14,0,0,0" />
+        <TextBlock Text="版本 2.4.14 · 开发者 五成" Foreground="#A0A0A5" FontSize="10" VerticalAlignment="Center" Margin="14,0,0,0" />
       </StackPanel>
     </Grid>
 

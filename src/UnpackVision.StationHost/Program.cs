@@ -16,7 +16,7 @@ using UnpackVision.Infrastructure.Diagnostics;
 using UnpackVision.StationHost;
 using static UnpackVision.StationHost.StationHostEndpointSupport;
 
-DiagnosticLog.Initialize("station-host", "2.3.2");
+DiagnosticLog.Initialize("station-host", "2.4.14");
 DiagnosticLog.RegisterGlobalExceptionHandlers();
 DiagnosticLog.Information("工位主机正在启动");
 
@@ -111,7 +111,7 @@ builder.Services.AddSingleton<IScanCommandLedger, SqliteScanCommandLedger>();
 builder.Services.AddSingleton<IMediaRelayManager, MediaRelayManager>();
 builder.Services.AddSingleton<IEventPublisher, NullEventPublisher>();
 builder.Services.AddSingleton<IRecordingBackend>(_ =>
-    new OpenCvRecordingBackend(storageOptions, localSettings.Camera));
+    new MultiCameraRecordingBackend(storageOptions, localSettings.CameraRig));
 builder.Services.AddSingleton<RecordingCoordinator>(services => new RecordingCoordinator(
     services.GetRequiredService<IScanRecordRepository>(),
     services.GetRequiredService<IRecordingBackend>(),
@@ -248,7 +248,7 @@ app.MapOpenApi();
 app.MapGet("/api/v1/health", () => Results.Ok(new
 {
     status = "healthy",
-    version = "2.3.2",
+    version = "2.4.14",
     tls = stationOptions.LanHttpsEnabled,
     // The desktop compares this startup snapshot with current Windows network
     // addresses. A mismatch means Wi-Fi, Ethernet or tethering changed and the
@@ -323,6 +323,20 @@ app.MapPost("/api/v1/records", async Task<IResult> (
         CreatedAt = now,
         UpdatedAt = now
     };
+    var primaryAsset = new RecordMediaAsset
+    {
+        RecordId = record.Id,
+        CameraId = "imported-primary",
+        DisplayName = "主机位",
+        Role = RecordMediaRole.Primary,
+        VideoPath = record.VideoPath,
+        Integrity = MediaIntegrityStatus.Complete,
+        CreatedAt = now,
+        UpdatedAt = now
+    };
+    record.CameraId = primaryAsset.CameraId;
+    record.MediaAssets = [primaryAsset];
+    record.DefaultMediaAssetId = primaryAsset.Id;
     await records.AddImportedAsync(record, null, cancellationToken);
     return Results.Created($"/api/v1/records/{record.Id}", ToStationRecordView(record));
 });
@@ -364,6 +378,67 @@ app.MapGet("/api/v1/records/{id:guid}/video", async Task<IResult> (
     var etag = new EntityTagHeaderValue($"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
     return Results.File(
         videoPath,
+        GetVideoContentType(info.Extension),
+        lastModified: new DateTimeOffset(info.LastWriteTimeUtc),
+        entityTag: etag,
+        enableRangeProcessing: true);
+});
+
+app.MapGet("/api/v1/records/{id:guid}/media", async Task<IResult> (
+    Guid id,
+    HttpContext context,
+    IScanRecordRepository records,
+    IPairedDeviceRegistry devices,
+    CancellationToken cancellationToken) =>
+{
+    if (!await AuthorizeAsync(context, devices, "video:read", cancellationToken))
+    {
+        return Results.Unauthorized();
+    }
+    if (await records.GetAsync(id, cancellationToken) is null)
+    {
+        return Results.NotFound();
+    }
+    var assets = await records.GetMediaAssetsAsync(id, cancellationToken);
+    return Results.Ok(assets.Select(asset => new
+    {
+        asset.Id,
+        asset.CameraId,
+        asset.DisplayName,
+        asset.Role,
+        asset.Width,
+        asset.Height,
+        asset.FramesPerSecond,
+        startOffsetMilliseconds = (long)asset.StartOffset.TotalMilliseconds,
+        asset.Integrity,
+        asset.FailureReason,
+        hasVideo = IsPathUnderRoot(asset.VideoPath, storageOptions.RecordingRoot) && File.Exists(asset.VideoPath)
+    }));
+});
+
+app.MapGet("/api/v1/records/{id:guid}/media/{assetId:guid}/video", async Task<IResult> (
+    Guid id,
+    Guid assetId,
+    HttpContext context,
+    IScanRecordRepository records,
+    IPairedDeviceRegistry devices,
+    CancellationToken cancellationToken) =>
+{
+    if (!await AuthorizeAsync(context, devices, "video:read", cancellationToken))
+    {
+        return Results.Unauthorized();
+    }
+    var asset = await records.GetMediaAssetAsync(id, assetId, cancellationToken);
+    if (asset is null ||
+        !IsPathUnderRoot(asset.VideoPath, storageOptions.RecordingRoot) ||
+        !File.Exists(asset.VideoPath))
+    {
+        return Results.NotFound(new { error = "媒体资产不存在" });
+    }
+    var info = new FileInfo(asset.VideoPath);
+    var etag = new EntityTagHeaderValue($"\"{info.Length:x}-{info.LastWriteTimeUtc.Ticks:x}\"");
+    return Results.File(
+        asset.VideoPath,
         GetVideoContentType(info.Extension),
         lastModified: new DateTimeOffset(info.LastWriteTimeUtc),
         entityTag: etag,
@@ -636,7 +711,7 @@ app.MapPost("/api/v1/media/publish-session", async Task<IResult> (
     }
     await mediaRelay.StartAsync(cancellationToken);
     var endpoint = mediaRelay.CreatePublishEndpoint(GetAdvertisedHost(stationOptions), device.Id);
-    if (recordingBackend is OpenCvRecordingBackend openCvBackend)
+    if (recordingBackend is MultiCameraRecordingBackend multiCameraBackend)
     {
         var phoneCamera = new CameraOptions
         {
@@ -654,7 +729,13 @@ app.MapPost("/api/v1/media/publish-session", async Task<IResult> (
             Saturation = localSettings.Camera.Saturation,
             AutoFocus = true
         };
-        await openCvBackend.ConfigureCameraAsync(phoneCamera, restartPreview: false, cancellationToken);
+        var target = localSettings.CameraRig.EnabledCameras
+            .FirstOrDefault(camera => camera.SourceType == CameraSourceType.NetworkStream)
+            ?? localSettings.CameraRig.PrimaryCamera;
+        if (target is not null)
+        {
+            await multiCameraBackend.ConfigureCameraAsync(target.Id, phoneCamera, restartPreview: false, cancellationToken);
+        }
     }
     return Results.Ok(endpoint);
 }).RequireRateLimiting("device");
@@ -662,6 +743,7 @@ app.MapPost("/api/v1/media/publish-session", async Task<IResult> (
 app.MapGet("/api/v1/stations/{id}/live", async Task<IResult> (
     string id,
     string? deviceId,
+    string? cameraId,
     HttpRequest request,
     IPairedDeviceRegistry devices,
     IMediaRelayManager mediaRelay,
@@ -686,9 +768,10 @@ app.MapGet("/api/v1/stations/{id}/live", async Task<IResult> (
         return Results.Unauthorized();
     }
     var allDevices = await devices.GetAllAsync(cancellationToken);
+    var requestedCamera = string.IsNullOrWhiteSpace(cameraId) ? deviceId : cameraId;
     var camera = allDevices
         .Where(item => !item.IsRevoked && item.Scopes.Contains("camera:publish", StringComparer.Ordinal))
-        .Where(item => string.IsNullOrWhiteSpace(deviceId) || string.Equals(item.Id, deviceId, StringComparison.Ordinal))
+        .Where(item => string.IsNullOrWhiteSpace(requestedCamera) || string.Equals(item.Id, requestedCamera, StringComparison.Ordinal))
         .OrderByDescending(item => item.LastSeenAt ?? item.PairedAt)
         .FirstOrDefault();
     if (camera is null)

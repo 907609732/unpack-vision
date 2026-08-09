@@ -30,7 +30,7 @@
           <TextBlock x:Name="Step4Label" Text="4  恢复检查" Margin="0,0,0,19" />
           <TextBlock x:Name="Step5Label" Text="5  完成" />
         </StackPanel>
-        <TextBlock Grid.Row="2" Text="开发者：五成 · 版本 2.3.2"
+        <TextBlock Grid.Row="2" Text="开发者：五成 · 版本 2.4.14"
                    Foreground="#7D8494" TextWrapping="Wrap" />
       </Grid>
     </Border>

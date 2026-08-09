@@ -11,6 +11,8 @@ $securityRoot = Join-Path $temporaryRoot "security"
 $videoPath = Join-Path $temporaryRoot "sample.mp4"
 $headersPath = Join-Path $temporaryRoot "range-headers.txt"
 $chunkPath = Join-Path $temporaryRoot "range-chunk.bin"
+$mediaHeadersPath = Join-Path $temporaryRoot "media-range-headers.txt"
+$mediaChunkPath = Join-Path $temporaryRoot "media-range-chunk.bin"
 [System.IO.File]::WriteAllBytes($videoPath, [byte[]](0..255))
 $hostOutputDirectory = Join-Path $repositoryRoot "src\UnpackVision.StationHost\bin\Release\net10.0-windows"
 $hostExecutable = Get-ChildItem -LiteralPath $hostOutputDirectory -Filter "*.exe" -File |
@@ -60,6 +62,8 @@ try {
         -Body $importBody
     $page = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/v1/records?limit=1"
     $publicJson = $page | ConvertTo-Json -Depth 8 -Compress
+    $media = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/v1/records/$($created.id)/media"
+    $mediaJson = $media | ConvertTo-Json -Depth 8 -Compress
     $videoUrl = "http://127.0.0.1:$port/api/v1/records/$($created.id)/video"
     & curl.exe --silent --show-error --dump-header $headersPath --header "Range: bytes=0-3" --output $chunkPath $videoUrl
     if ($LASTEXITCODE -ne 0) {
@@ -68,6 +72,15 @@ try {
     $headers = Get-Content -LiteralPath $headersPath
     $statusLine = $headers | Select-Object -First 1
     $etag = $headers | Where-Object { $_ -like "ETag:*" } | Select-Object -First 1
+    $mediaAssetId = $media[0].id
+    $mediaVideoUrl = "http://127.0.0.1:$port/api/v1/records/$($created.id)/media/$mediaAssetId/video"
+    & curl.exe --silent --show-error --dump-header $mediaHeadersPath --header "Range: bytes=4-7" --output $mediaChunkPath $mediaVideoUrl
+    if ($LASTEXITCODE -ne 0) {
+        throw "curl media range request failed with exit code $LASTEXITCODE"
+    }
+    $mediaHeaders = Get-Content -LiteralPath $mediaHeadersPath
+    $mediaStatusLine = $mediaHeaders | Select-Object -First 1
+    $mediaEtag = $mediaHeaders | Where-Object { $_ -like "ETag:*" } | Select-Object -First 1
 
     $result = [pscustomobject]@{
         StationHealthy = $health.status
@@ -75,9 +88,14 @@ try {
         TrackingNo = $page.items[0].trackingNo
         LocalPathHidden = -not $publicJson.Contains($temporaryRoot)
         HasVideo = $page.items[0].hasVideo
+        MediaAssetCount = $media.Count
+        MediaPathHidden = -not $mediaJson.Contains($temporaryRoot)
         RangeStatus = $statusLine.Trim()
         RangeBytes = (Get-Item -LiteralPath $chunkPath).Length
         ETagPresent = -not [string]::IsNullOrWhiteSpace($etag)
+        MediaRangeStatus = $mediaStatusLine.Trim()
+        MediaRangeBytes = (Get-Item -LiteralPath $mediaChunkPath).Length
+        MediaETagPresent = -not [string]::IsNullOrWhiteSpace($mediaEtag)
         NextCursor = $page.nextCursor
     }
     $result
@@ -85,9 +103,14 @@ try {
         $result.RecordCount -ne 1 -or
         -not $result.LocalPathHidden -or
         -not $result.HasVideo -or
+        $result.MediaAssetCount -ne 1 -or
+        -not $result.MediaPathHidden -or
         $result.RangeStatus -notlike '* 206 *' -or
         $result.RangeBytes -ne 4 -or
-        -not $result.ETagPresent) {
+        -not $result.ETagPresent -or
+        $result.MediaRangeStatus -notlike '* 206 *' -or
+        $result.MediaRangeBytes -ne 4 -or
+        -not $result.MediaETagPresent) {
         throw "Record API smoke-test result did not match the release contract."
     }
 }

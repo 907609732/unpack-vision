@@ -38,3 +38,46 @@ public interface IWorkspaceRecoveryService
         RecoveryPreview preview,
         CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// Copies the application-owned recording archive to a different root before settings
+/// switch future recordings there. The source remains untouched so an interrupted
+/// migration can never make a completed recording unavailable.
+/// </summary>
+public interface IRecordingRootMigrationService
+{
+    Task<RecordingRootMigrationPreview> PreviewAsync(
+        string sourceRoot,
+        string targetRoot,
+        CancellationToken cancellationToken = default);
+
+    Task<RecordingRootMigrationResult> MigrateAsync(
+        RecordingRootMigrationPreview preview,
+        IProgress<RecordingRootMigrationProgress>? progress = null,
+        CancellationToken cancellationToken = default);
+}
+
+public sealed record RecordingRootMigrationPreview(
+    string SourceRoot,
+    string TargetRoot,
+    int FileCount,
+    long TotalBytes,
+    IReadOnlyList<string> RelativePaths)
+{
+    public bool HasContent => FileCount > 0;
+}
+
+public sealed record RecordingRootMigrationProgress(
+    int CompletedFiles,
+    int TotalFiles,
+    string RelativePath,
+    long CompletedBytes,
+    long TotalBytes,
+    long CurrentFileBytes,
+    long CurrentFileTotalBytes);
+
+public sealed record RecordingRootMigrationResult(
+    int CopiedFiles,
+    int VerifiedExistingFiles,
+    long CopiedBytes,
+    string ReportPath);

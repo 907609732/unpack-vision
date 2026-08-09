@@ -45,6 +45,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                   </Grid.RowDefinitions>
                   <TextBlock Text="录像保存位置" Style="{StaticResource SettingsFieldLabel}" />
                   <TextBox x:Name="RecordingRootInput" Grid.Column="1"
@@ -144,8 +145,63 @@
 
             <Border Style="{StaticResource SettingsCard}">
               <StackPanel>
-                <TextBlock Text="视频来源" Style="{StaticResource SettingsCardTitle}" />
-                <TextBlock Text="录像过程中不能切换视频源；更改会在下一次启动相机时应用。"
+                <TextBlock Text="1  选择录像模式" Style="{StaticResource SettingsCardTitle}" />
+                <TextBlock Text="单机位适合普通拆包；需要同时录制多个角度时再开启多机位。"
+                           Style="{StaticResource SettingsCardDescription}" />
+                <Border Background="#F4F7FC" BorderBrush="#18000000" BorderThickness="1" CornerRadius="14" Padding="14" Margin="0,12,0,0">
+                  <StackPanel>
+                    <TextBlock Text="录像模式" Style="{StaticResource SettingsFieldLabel}" />
+                    <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                      <RadioButton x:Name="SingleCameraModeOption" Content="单机位" GroupName="CameraRigMode"
+                                   IsChecked="True" Checked="CameraRigMode_OnChecked" />
+                      <RadioButton x:Name="MultiCameraModeOption" Content="多机位（最多4路）" GroupName="CameraRigMode"
+                                   Margin="24,0,0,0" Checked="CameraRigMode_OnChecked" />
+                    </StackPanel>
+                    <TextBlock x:Name="CameraModeDescriptionText" Margin="0,8,0,0"
+                               Style="{StaticResource SettingsCardDescription}"
+                               Text="单机位仅使用主机位，保留最常用的来源与画面设置。" />
+                  </StackPanel>
+                </Border>
+                <StackPanel x:Name="MultiCameraManagementPanel" Visibility="Collapsed" Margin="0,14,0,0">
+                <TextBlock Text="选择要配置的机位" Style="{StaticResource SettingsFieldLabel}" Margin="0,0,0,8" />
+                <ListBox x:Name="CameraRigList" MinHeight="92" MaxHeight="180"
+                         SelectionChanged="CameraRigList_OnSelectionChanged">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate>
+                      <DockPanel LastChildFill="True">
+                        <TextBlock DockPanel.Dock="Right" Margin="12,0,0,0" Foreground="#2274E8"
+                                   Text="主机位" Visibility="{Binding IsPrimary, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <TextBlock Text="{Binding DisplayName}" />
+                      </DockPanel>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+                <WrapPanel Margin="0,12,0,0">
+                  <Button x:Name="AddCameraButton" Content="＋ 添加机位"
+                          Style="{StaticResource SecondaryButton}" Click="AddCamera_OnClick" />
+                  <Button x:Name="CameraMoreActionsButton" Content="更多操作  ···"
+                          Style="{StaticResource SecondaryButton}" Margin="8,0,0,0"
+                          Click="CameraMoreActions_OnClick">
+                    <Button.ContextMenu>
+                      <ContextMenu>
+                        <MenuItem Header="设为主机位" Click="SetPrimaryCamera_OnClick" />
+                        <Separator />
+                        <MenuItem Header="上移机位" Click="MoveCameraUp_OnClick" />
+                        <MenuItem Header="下移机位" Click="MoveCameraDown_OnClick" />
+                        <Separator />
+                        <MenuItem Header="删除机位" Foreground="#D92D20" Click="RemoveCamera_OnClick" />
+                      </ContextMenu>
+                    </Button.ContextMenu>
+                  </Button>
+                </WrapPanel>
+                </StackPanel>
+              </StackPanel>
+            </Border>
+
+            <Border Style="{StaticResource SettingsCard}">
+              <StackPanel>
+                <TextBlock Text="2  配置当前机位" Style="{StaticResource SettingsCardTitle}" />
+                <TextBlock Text="选择来源后只显示对应的连接入口；录像过程中不能切换来源。"
                            Style="{StaticResource SettingsCardDescription}" />
                 <Grid>
                   <Grid.ColumnDefinitions>
@@ -155,9 +211,12 @@
                   <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                   </Grid.RowDefinitions>
-                  <TextBlock Text="来源类型" Style="{StaticResource SettingsFieldLabel}" />
-                  <ComboBox x:Name="CameraSourceKindInput" Grid.Column="1"
+                  <TextBlock Text="机位名称" Style="{StaticResource SettingsFieldLabel}" />
+                  <TextBox x:Name="CameraNameInput" Grid.Column="1" Style="{StaticResource SettingsInput}" MaxLength="24" />
+                  <TextBlock Grid.Row="1" Text="来源类型" Margin="0,14,0,0" Style="{StaticResource SettingsFieldLabel}" />
+                  <ComboBox x:Name="CameraSourceKindInput" Grid.Row="1" Grid.Column="1" Margin="0,14,0,0"
                             Style="{StaticResource SettingsCombo}"
                             SelectionChanged="CameraSourceKindInput_OnSelectionChanged">
                     <ComboBoxItem Content="自动选择本地摄像头" Tag="AutoLocal" />
@@ -165,9 +224,9 @@
                     <ComboBoxItem Content="IPC / 自定义 RTSP、HTTP 视频流" Tag="NetworkStream" />
                     <ComboBoxItem Content="海康威视 NVR / DVR" Tag="HikvisionRecorder" />
                   </ComboBox>
-                  <TextBlock Grid.Row="1" Text="本地摄像头" Margin="0,14,0,0"
+                  <TextBlock x:Name="LocalCameraLabel" Grid.Row="2" Text="本地摄像头" Margin="0,14,0,0"
                              Style="{StaticResource SettingsFieldLabel}" />
-                  <StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Margin="0,14,0,0">
+                  <StackPanel x:Name="LocalCameraPanel" Grid.Row="2" Grid.Column="1" Orientation="Horizontal" Margin="0,14,0,0">
                     <ComboBox x:Name="CameraIndexInput" Width="240"
                               Style="{StaticResource SettingsCombo}" />
                     <CheckBox x:Name="AutoBestCameraCheck"
@@ -178,10 +237,10 @@
               </StackPanel>
             </Border>
 
-            <Border Style="{StaticResource SettingsCard}">
+            <Border x:Name="NetworkConnectionCard" Style="{StaticResource SettingsCard}" Visibility="Collapsed">
               <StackPanel>
-                <TextBlock Text="网络与录像机连接" Style="{StaticResource SettingsCardTitle}" />
-                <TextBlock Text="只有对应的视频来源会启用这些字段；密码使用 Windows DPAPI 加密保存。"
+                <TextBlock Text="当前来源的连接信息" Style="{StaticResource SettingsCardTitle}" />
+                <TextBlock Text="填写当前来源所需的信息；密码使用 Windows DPAPI 加密保存。"
                            Style="{StaticResource SettingsCardDescription}" />
                 <Grid>
                   <Grid.ColumnDefinitions>
@@ -192,17 +251,20 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                   </Grid.RowDefinitions>
-                  <TextBlock Text="IPC 流地址" Style="{StaticResource SettingsFieldLabel}" />
+                  <TextBlock x:Name="NetworkStreamLabel" Text="IPC 流地址" Style="{StaticResource SettingsFieldLabel}" />
                   <TextBox x:Name="NetworkStreamUrlInput" Grid.Column="1"
                            Style="{StaticResource SettingsInput}"
                            ToolTip="例如 rtsp://192.168.1.20:554/live 或 HTTP MJPEG 地址" />
 
-                  <TextBlock Grid.Row="1" Text="海康录像机" Margin="0,14,0,0"
+                  <TextBlock x:Name="HikvisionRecorderLabel" Grid.Row="1" Text="海康录像机" Margin="0,14,0,0"
                              Style="{StaticResource SettingsFieldLabel}" />
-                  <WrapPanel Grid.Row="1" Grid.Column="1" Margin="0,14,0,0">
+                  <WrapPanel x:Name="HikvisionRecorderPanel" Grid.Row="1" Grid.Column="1" Margin="0,14,0,0">
                     <TextBox x:Name="HikvisionHostInput" Width="210"
-                             Style="{StaticResource SettingsInput}" ToolTip="IP 地址或域名" />
+                              Style="{StaticResource SettingsInput}" ToolTip="IP 地址或域名" />
+                    <TextBlock Text="管理端口" Margin="12,0,7,0" VerticalAlignment="Center" />
+                    <TextBox x:Name="HikvisionHttpPortInput" Width="70" Style="{StaticResource SettingsInput}" ToolTip="ISAPI 管理端口，通常为 80" />
                     <TextBlock Text="端口" Margin="12,0,7,0" VerticalAlignment="Center" />
                     <TextBox x:Name="HikvisionPortInput" Width="76" Style="{StaticResource SettingsInput}" />
                     <TextBlock Text="通道" Margin="12,0,7,0" VerticalAlignment="Center" />
@@ -214,24 +276,52 @@
                     </ComboBox>
                   </WrapPanel>
 
-                  <TextBlock Grid.Row="2" Text="登录凭据" Margin="0,14,0,0"
+                  <TextBlock x:Name="NetworkCredentialsLabel" Grid.Row="2" Text="登录凭据" Margin="0,14,0,0"
                              Style="{StaticResource SettingsFieldLabel}" />
-                  <WrapPanel Grid.Row="2" Grid.Column="1" Margin="0,14,0,0">
+                  <WrapPanel x:Name="NetworkCredentialsPanel" Grid.Row="2" Grid.Column="1" Margin="0,14,0,0">
                     <TextBox x:Name="NetworkUsernameInput" Width="220"
                              Style="{StaticResource SettingsInput}" ToolTip="网络账号" />
                     <PasswordBox x:Name="NetworkPasswordInput" Width="220" Height="40"
                                  Padding="11,7" Margin="10,0,0,0" ToolTip="网络密码" />
                   </WrapPanel>
+
+                  <TextBlock x:Name="HikvisionDiscoveryLabel" Grid.Row="3" Text="通道发现" Margin="0,14,0,0"
+                             Style="{StaticResource SettingsFieldLabel}" />
+                  <StackPanel x:Name="HikvisionDiscoveryPanel" Grid.Row="3" Grid.Column="1" Margin="0,14,0,0">
+                    <WrapPanel>
+                      <Button x:Name="DiscoverHikvisionChannelsButton"
+                              Content="发现并添加全部通道"
+                              Style="{StaticResource SecondaryButton}"
+                              Click="DiscoverHikvisionChannels_OnClick" />
+                      <CheckBox x:Name="HikvisionPreferSubStreamCheck"
+                                Content="优先使用子码流"
+                                IsChecked="True"
+                                VerticalAlignment="Center"
+                                Margin="14,0,0,0" />
+                      <ProgressBar x:Name="HikvisionDiscoveryProgress"
+                                   Width="110" Height="6" Margin="14,0,0,0"
+                                   VerticalAlignment="Center"
+                                   IsIndeterminate="True" Visibility="Collapsed" />
+                    </WrapPanel>
+                    <TextBlock x:Name="HikvisionDiscoveryStatusText"
+                               Text="自动读取录像机实际发布的通道，避免配置到不存在的通道。"
+                               Style="{StaticResource SettingsCardDescription}"
+                               Margin="0,8,0,0" TextWrapping="Wrap" />
+                  </StackPanel>
                 </Grid>
               </StackPanel>
             </Border>
 
             <Border Style="{StaticResource SettingsCard}">
-              <StackPanel>
-                <TextBlock Text="录像规格" Style="{StaticResource SettingsCardTitle}" />
-                <TextBlock Text="分辨率与帧率应与相机能力匹配。"
-                           Style="{StaticResource SettingsCardDescription}" />
-                <Grid>
+              <Expander x:Name="AdvancedRecordingExpander" IsExpanded="False">
+                <Expander.Header>
+                  <StackPanel>
+                    <TextBlock Text="高级录像参数" Style="{StaticResource SettingsCardTitle}" />
+                    <TextBlock Text="一般保持默认即可；需要调整分辨率、帧率或聚焦时再展开。"
+                               Style="{StaticResource SettingsCardDescription}" />
+                  </StackPanel>
+                </Expander.Header>
+                <Grid Margin="0,16,0,0">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="130" />
                     <ColumnDefinition Width="*" />
@@ -256,15 +346,19 @@
                             Content="自动聚焦（网络视频源通常由摄像机或录像机管理）"
                             Margin="0,16,0,0" />
                 </Grid>
-              </StackPanel>
+              </Expander>
             </Border>
 
             <Border Style="{StaticResource SettingsCard}">
-              <StackPanel>
-                <TextBlock Text="画面调节" Style="{StaticResource SettingsCardTitle}" />
-                <TextBlock Text="软件实时处理会应用到预览和最终录像。"
-                           Style="{StaticResource SettingsCardDescription}" />
-                <Grid>
+              <Expander x:Name="AdvancedPictureExpander" IsExpanded="False">
+                <Expander.Header>
+                  <StackPanel>
+                    <TextBlock Text="高级画面调节" Style="{StaticResource SettingsCardTitle}" />
+                    <TextBlock Text="亮度、对比度、清晰度和饱和度会应用到预览及录像。"
+                               Style="{StaticResource SettingsCardDescription}" />
+                  </StackPanel>
+                </Expander.Header>
+                <Grid Margin="0,16,0,0">
                   <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="130" />
                     <ColumnDefinition Width="*" />
@@ -284,6 +378,22 @@
                   <TextBlock Grid.Row="3" Text="饱和度" Margin="0,15,0,0" Style="{StaticResource SettingsFieldLabel}" />
                   <Slider x:Name="SaturationSlider" Grid.Row="3" Grid.Column="1" Minimum="0" Maximum="100" TickFrequency="1" Margin="0,15,0,0" />
                 </Grid>
+              </Expander>
+            </Border>
+
+            <Border Style="{StaticResource SettingsCard}">
+              <StackPanel>
+                <TextBlock Text="3  测试并保存" Style="{StaticResource SettingsCardTitle}" />
+                <TextBlock Text="先确认选中机位能正常出画面；多机位模式还需要测试全部机位的性能。"
+                           Style="{StaticResource SettingsCardDescription}" />
+                <WrapPanel Margin="0,14,0,0">
+                  <Button x:Name="TestCurrentCameraButton" Content="测试当前机位"
+                          Style="{StaticResource SecondaryButton}" Click="TestCurrentCamera_OnClick" />
+                  <Button x:Name="TestAllCamerasButton" Content="测试全部机位"
+                          Margin="8,0,0,0" Visibility="Collapsed" Click="TestCameraRig_OnClick" />
+                </WrapPanel>
+                <TextBlock x:Name="CameraRigStatusText" Text="尚未测试当前配置"
+                           Style="{StaticResource SettingsCardDescription}" Margin="0,10,0,0" />
               </StackPanel>
             </Border>
           </StackPanel>
@@ -456,7 +566,7 @@
                        Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
                 <StackPanel Grid.Column="1" Margin="18,0,0,0" VerticalAlignment="Center">
                   <TextBlock Text="拆包智录" FontSize="24" FontWeight="SemiBold" />
-                  <TextBox x:Name="AboutVersionText" Text="版本 2.3.2"
+                  <TextBox x:Name="AboutVersionText" Text="版本 2.4.14"
                            Style="{StaticResource SelectableText}" Margin="0,7,0,0"
                            FontSize="14" Foreground="{StaticResource TextSecondaryBrush}" />
                   <TextBlock Text="开发者：五成" Margin="0,5,0,0" Foreground="{StaticResource TextSecondaryBrush}" />
@@ -537,6 +647,16 @@
                 </WrapPanel>
               </StackPanel>
             </Border>
+
+            <Border Style="{StaticResource SettingsCard}">
+              <StackPanel>
+                <TextBlock Text="卸载与数据保留" Style="{StaticResource SettingsCardTitle}" />
+                <TextBlock Text="推荐从这里安全卸载。直接从 Windows“已安装的应用”卸载时，录像、Excel、数据库和设置会默认保留。"
+                           Style="{StaticResource SettingsCardDescription}" />
+                <Button Content="安全卸载拆包智录" HorizontalAlignment="Left"
+                        Style="{StaticResource SecondaryButton}" Click="SafeUninstall_OnClick" />
+              </StackPanel>
+            </Border>
           </StackPanel>
         </ScrollViewer>
       </TabItem>
@@ -559,6 +679,11 @@
 
             <Border Style="{StaticResource SettingsInfoPanel}" Margin="0,0,0,14">
               <TextBlock Foreground="#245A8D" TextWrapping="Wrap" LineHeight="22"
+                         Text="修改“录像保存位置”并保存时，软件会先统计旧目录中的完成录像和 .unpackvision 便携索引，再询问是否迁移。选择迁移会复制到新盘并逐个校验；旧文件会保留，确认新盘录像可播放后再自行清理旧盘文件。" />
+            </Border>
+
+            <Border Style="{StaticResource SettingsInfoPanel}" Margin="0,0,0,14">
+              <TextBlock Foreground="#245A8D" TextWrapping="Wrap" LineHeight="22"
                          Text=".unpackvision 目录保存单号、时间、相对录像路径、标签、异常时间、备注和同步状态，不保存摄像头密码、手机令牌或 API 密钥。请不要只复制 MP4 而遗漏该目录。" />
             </Border>
 
@@ -577,12 +702,20 @@
                            Text="匿名日活只进行出站 HTTPS 请求，不开放互联网端口，也不接收远程指令。手机协同仅允许 Windows 专用网络，禁止公共网络和路由器端口映射。" />
               </StackPanel>
             </Border>
+
+            <Border Style="{StaticResource SettingsCard}">
+              <StackPanel>
+                <TextBlock Text="如何安全卸载？" Style="{StaticResource SettingsCardTitle}" />
+                <TextBlock Margin="0,9,0,0" TextWrapping="Wrap" Foreground="#596170" LineHeight="22"
+                           Text="进入“关于 → 卸载与数据保留 → 安全卸载拆包智录”。默认保留全部业务数据，重新安装后可继续使用。选择永久删除时会连续确认两次，只删除当前工作区的软件录像、截图、便携索引及本机 AppData；Excel 始终保留。直接从 Windows 已安装的应用卸载也会默认保留数据。" />
+              </StackPanel>
+            </Border>
           </StackPanel>
         </ScrollViewer>
       </TabItem>
     </TabControl>
 
-    <Border Grid.Row="1" Style="{StaticResource SettingsActionBar}" Margin="214,14,0,0">
+    <Border x:Name="SettingsActionBar" Grid.Row="1" Style="{StaticResource SettingsActionBar}" Margin="214,14,0,0">
       <DockPanel>
         <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
           <TextBlock Text="&#xE73E;" FontFamily="Segoe Fluent Icons" Foreground="#708096"
@@ -597,6 +730,27 @@
                   Click="Save_OnClick" />
         </StackPanel>
       </DockPanel>
+    </Border>
+
+    <Border x:Name="MigrationProgressOverlay" Grid.RowSpan="2" Visibility="Collapsed"
+            Background="#8A0B1220" CornerRadius="20" Padding="28">
+      <Border Width="520" HorizontalAlignment="Center" VerticalAlignment="Center"
+              Background="#FBFFFFFF" CornerRadius="22" Padding="28">
+        <StackPanel>
+          <TextBlock Text="正在安全迁移录像" FontSize="22" FontWeight="SemiBold" Foreground="#18212F" />
+          <TextBlock Text="正在复制并逐个校验文件。旧目录会完整保留，请勿关闭窗口或断开存储设备。"
+                     Margin="0,9,0,0" TextWrapping="Wrap" Foreground="#5E6A7C" LineHeight="21" />
+          <ProgressBar x:Name="MigrationProgressBar" Height="10" Minimum="0" Maximum="100"
+                       Margin="0,22,0,0" Value="0" />
+          <DockPanel Margin="0,9,0,0">
+            <TextBlock x:Name="MigrationProgressPercentText" Text="0%" FontWeight="SemiBold" Foreground="#2274E8" />
+            <TextBlock x:Name="MigrationProgressCountText" DockPanel.Dock="Right" Text="准备中"
+                       Foreground="#5E6A7C" />
+          </DockPanel>
+          <TextBox x:Name="MigrationProgressDetailText" Margin="0,16,0,0" Style="{StaticResource SelectableText}"
+                   Text="正在准备迁移清单…" TextWrapping="Wrap" IsReadOnly="True" />
+        </StackPanel>
+      </Border>
     </Border>
   </Grid>
 </Window>

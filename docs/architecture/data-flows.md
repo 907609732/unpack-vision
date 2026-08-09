@@ -4,6 +4,8 @@
 
 Scanner input is normalized by the presentation adapter, routed to the recording use case, persisted through `IScanRecordRepository`, executed by `IRecordingBackend`, and queued for connectors after successful finalization. UI updates consume use-case results; they do not decide recording state.
 
+For a multi-camera rig, each source has one capture pipeline and a bounded latest-frame slot. One writer loop owns all independent encoders and the composite encoder, records secondary gaps, and closes every writer before any `.partial.mp4` is renamed. The primary path remains the compatibility projection; media assets and gaps are committed in the same SQLite transaction as the completed record and sync delivery.
+
 ## Mobile command
 
 The Android client authenticates with its paired device credential and submits an idempotent command. StationHost enforces host, rate, size, scope, and device checks before the application router executes it. The command ledger returns the prior acknowledgement for a repeated idempotency key.

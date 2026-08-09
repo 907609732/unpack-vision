@@ -4,6 +4,38 @@ namespace UnpackVision.Tests;
 
 public sealed class MainWindowXamlBindingTests
 {
+    [Fact]
+    public void MainWindowContainsAdaptiveMultiCameraPreviewSurface()
+    {
+        var xamlPath = Path.Combine(AppContext.BaseDirectory, "TestData", "MainWindow.xaml");
+        var document = XDocument.Load(xamlPath);
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+
+        Assert.Contains(document.Descendants(), element =>
+            (string?)element.Attribute(x + "Name") == "CameraPreviewGrid");
+
+        for (var count = 1; count <= 4; count++)
+        {
+            var button = document.Descendants()
+                .Single(element => (string?)element.Attribute(x + "Name") == $"PreviewLayout{count}Button");
+            Assert.Equal(count.ToString(), (string?)button.Attribute("Tag"));
+            Assert.Equal("PreviewLayoutButton_OnClick", (string?)button.Attribute("Click"));
+        }
+    }
+
+    [Fact]
+    public void MainWindowCameraPicker_ExplainsLocalCameraQuickSwitching()
+    {
+        var xamlPath = Path.Combine(AppContext.BaseDirectory, "TestData", "MainWindow.xaml");
+        var document = XDocument.Load(xamlPath);
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+
+        var picker = document.Descendants()
+            .Single(element => (string?)element.Attribute(x + "Name") == "CameraSourceSelector");
+
+        Assert.Contains("本地摄像头", (string?)picker.Attribute("ToolTip"), StringComparison.Ordinal);
+        Assert.Equal("CameraSourceSelector_OnSelectionChanged", (string?)picker.Attribute("SelectionChanged"));
+    }
     [Theory]
     [InlineData("TrackingNo")]
     [InlineData("TimeText")]

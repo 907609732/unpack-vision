@@ -30,6 +30,38 @@ public enum SyncStatus
     Failed
 }
 
+public enum RecordMediaRole
+{
+    Primary,
+    Angle,
+    Composite
+}
+
+public enum MediaIntegrityStatus
+{
+    Complete,
+    Partial,
+    Failed
+}
+
+public sealed class RecordMediaAsset
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid RecordId { get; set; }
+    public string CameraId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public RecordMediaRole Role { get; set; }
+    public string VideoPath { get; set; } = string.Empty;
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public double FramesPerSecond { get; set; }
+    public TimeSpan StartOffset { get; set; }
+    public MediaIntegrityStatus Integrity { get; set; } = MediaIntegrityStatus.Complete;
+    public string? FailureReason { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+}
+
 public sealed record ScannerProfile
 {
     public string? ScannerDeviceId { get; init; }
@@ -87,6 +119,10 @@ public sealed class ScanRecord
     public string? VideoPath { get; set; }
     public IReadOnlyList<string> Snapshots { get; set; } = [];
     public string? CameraId { get; set; }
+    public MediaIntegrityStatus MediaIntegrity { get; set; } = MediaIntegrityStatus.Complete;
+    public Guid? DefaultMediaAssetId { get; set; }
+    public IReadOnlyList<RecordMediaAsset> MediaAssets { get; set; } = [];
+    public IReadOnlyList<MediaGap> MediaGaps { get; set; } = [];
     public string StationId { get; set; } = Environment.MachineName;
     public Guid? DuplicateOf { get; set; }
     public string PlatformMatchStatus { get; set; } = "待匹配";
@@ -225,7 +261,21 @@ public sealed record RecordingSession(
     DateTimeOffset StartedAt,
     string TemporaryPath);
 
-public sealed record RecordingCompletion(string VideoPath, DateTimeOffset EndedAt);
+public sealed record RecordingCompletion(
+    string VideoPath,
+    DateTimeOffset EndedAt,
+    string? DefaultVideoPath = null,
+    IReadOnlyList<RecordMediaAsset>? MediaAssets = null,
+    IReadOnlyList<MediaGap>? MediaGaps = null,
+    MediaIntegrityStatus MediaIntegrity = MediaIntegrityStatus.Complete)
+{
+    public string EffectiveDefaultVideoPath => string.IsNullOrWhiteSpace(DefaultVideoPath)
+        ? VideoPath
+        : DefaultVideoPath;
+
+    public IReadOnlyList<RecordMediaAsset> EffectiveMediaAssets => MediaAssets ?? [];
+    public IReadOnlyList<MediaGap> EffectiveMediaGaps => MediaGaps ?? [];
+}
 
 public sealed record ParsedRecording(
     string TrackingNo,

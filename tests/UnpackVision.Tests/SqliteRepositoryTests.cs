@@ -187,6 +187,80 @@ public sealed class SqliteRepositoryTests : IDisposable
         Assert.All(records, record => Assert.Equal(record.Id, deliveries[record.Id].RecordId));
     }
 
+    [Fact]
+    public async Task PersistsMultipleMediaAssetsGapsAndDefaultPlaybackAsset()
+    {
+        var repository = new SqliteScanRecordRepository(new StorageOptions
+        {
+            DatabasePath = Path.Combine(_root, "multi-media.db")
+        });
+        await repository.InitializeAsync();
+        var now = DateTimeOffset.Now;
+        var record = new ScanRecord
+        {
+            TrackingNo = "MULTI-001",
+            State = RecordingState.Recording,
+            ScannedAt = now,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        await repository.AddAsync(record);
+        var primary = new RecordMediaAsset
+        {
+            RecordId = record.Id,
+            CameraId = "front",
+            DisplayName = "主机位",
+            Role = RecordMediaRole.Primary,
+            VideoPath = Path.Combine(_root, "primary.mp4"),
+            Width = 3840,
+            Height = 2160,
+            FramesPerSecond = 15,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        var composite = new RecordMediaAsset
+        {
+            RecordId = record.Id,
+            CameraId = "composite",
+            DisplayName = "多机位合成",
+            Role = RecordMediaRole.Composite,
+            VideoPath = Path.Combine(_root, "composite.mp4"),
+            Width = 1920,
+            Height = 1080,
+            FramesPerSecond = 15,
+            Integrity = MediaIntegrityStatus.Partial,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        record.State = RecordingState.Completed;
+        record.VideoPath = primary.VideoPath;
+        record.CameraId = primary.CameraId;
+        record.MediaIntegrity = MediaIntegrityStatus.Partial;
+        record.DefaultMediaAssetId = composite.Id;
+        record.MediaAssets = [primary, composite];
+        record.MediaGaps = [new MediaGap
+        {
+            RecordId = record.Id,
+            MediaAssetId = composite.Id,
+            CameraId = "side",
+            StartedAt = now.AddSeconds(5),
+            EndedAt = now.AddSeconds(8),
+            Recovered = true,
+            Reason = "测试中断"
+        }];
+        await repository.CompleteAndEnqueueAsync(record, "excel");
+
+        var loaded = Assert.IsType<ScanRecord>(await repository.GetAsync(record.Id));
+        Assert.Equal(MediaIntegrityStatus.Partial, loaded.MediaIntegrity);
+        Assert.Equal(composite.Id, loaded.DefaultMediaAssetId);
+        Assert.Equal(2, loaded.MediaAssets.Count);
+        Assert.Single(loaded.MediaGaps);
+        Assert.Equal(composite.VideoPath, (await repository.GetMediaAssetAsync(record.Id, composite.Id))?.VideoPath);
+
+        await repository.InitializeAsync();
+        Assert.Equal(2, (await repository.GetMediaAssetsAsync(record.Id)).Count);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_root))

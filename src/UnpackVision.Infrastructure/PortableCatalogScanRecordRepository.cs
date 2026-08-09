@@ -61,6 +61,12 @@ public sealed class PortableCatalogScanRecordRepository(
         inner.FindFirstCompletedAsync(trackingNo, cancellationToken);
     public Task<ScanRecord?> FindByVideoPathAsync(string videoPath, CancellationToken cancellationToken = default) =>
         inner.FindByVideoPathAsync(videoPath, cancellationToken);
+    public Task<IReadOnlyList<RecordMediaAsset>> GetMediaAssetsAsync(Guid recordId, CancellationToken cancellationToken = default) =>
+        inner.GetMediaAssetsAsync(recordId, cancellationToken);
+    public Task<RecordMediaAsset?> GetMediaAssetAsync(Guid recordId, Guid assetId, CancellationToken cancellationToken = default) =>
+        inner.GetMediaAssetAsync(recordId, assetId, cancellationToken);
+    public Task<IReadOnlyList<MediaGap>> GetMediaGapsAsync(Guid recordId, CancellationToken cancellationToken = default) =>
+        inner.GetMediaGapsAsync(recordId, cancellationToken);
     public Task<IReadOnlyList<ScanRecord>> QueryAsync(string? trackingNo = null, int limit = 200, CancellationToken cancellationToken = default) =>
         inner.QueryAsync(trackingNo, limit, cancellationToken);
     public Task<IReadOnlyList<ScanRecord>> QueryPageAsync(string? trackingNo, int offset, int limit, CancellationToken cancellationToken = default) =>

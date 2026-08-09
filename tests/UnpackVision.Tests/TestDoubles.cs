@@ -107,6 +107,12 @@ internal sealed class InMemoryRepository : IScanRecordRepository
             record.TrackingNo == trackingNo && record.State is RecordingState.Completed or RecordingState.Collected or RecordingState.Imported));
     public Task<ScanRecord?> FindByVideoPathAsync(string videoPath, CancellationToken cancellationToken = default) =>
         Task.FromResult(Records.FirstOrDefault(record => string.Equals(record.VideoPath, videoPath, StringComparison.OrdinalIgnoreCase)));
+    public Task<IReadOnlyList<RecordMediaAsset>> GetMediaAssetsAsync(Guid recordId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<RecordMediaAsset>>(Records.FirstOrDefault(record => record.Id == recordId)?.MediaAssets ?? []);
+    public Task<RecordMediaAsset?> GetMediaAssetAsync(Guid recordId, Guid assetId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Records.FirstOrDefault(record => record.Id == recordId)?.MediaAssets.FirstOrDefault(asset => asset.Id == assetId));
+    public Task<IReadOnlyList<MediaGap>> GetMediaGapsAsync(Guid recordId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<MediaGap>>(Records.FirstOrDefault(record => record.Id == recordId)?.MediaGaps ?? []);
     public Task<IReadOnlyList<ScanRecord>> QueryAsync(string? trackingNo = null, int limit = 200, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<ScanRecord>>(Records.Take(limit).ToList());
     public Task<IReadOnlyList<ScanRecord>> QueryPageAsync(string? trackingNo, int offset, int limit, CancellationToken cancellationToken = default) =>

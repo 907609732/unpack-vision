@@ -195,6 +195,22 @@ public sealed class ExcelConnectorTests : IDisposable
         Assert.DoesNotContain("外箱破裂", text);
     }
 
+    [Fact]
+    public void PartialMultiCameraAnnotationNamesIncompleteAngles()
+    {
+        var record = new ScanRecord
+        {
+            MediaIntegrity = MediaIntegrityStatus.Partial,
+            MediaAssets =
+            [
+                new RecordMediaAsset { DisplayName = "主机位", Integrity = MediaIntegrityStatus.Complete },
+                new RecordMediaAsset { DisplayName = "侧面机位", Integrity = MediaIntegrityStatus.Partial }
+            ]
+        };
+
+        Assert.Equal("【拆包智录】多机位不完整：侧面机位", ExcelConnector.BuildAnnotation(record));
+    }
+
     private async Task<(ExcelConnector Connector, string VideoPath)> CreateConnectorWithVideoAsync(
         string workbook,
         string videoName)
