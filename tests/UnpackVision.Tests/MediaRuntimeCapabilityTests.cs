@@ -284,17 +284,16 @@ public sealed class MediaRuntimeCapabilityTests
             var deadline = ProcessTreeTestDeadline();
             if (cancelCaller)
             {
-                cancellation.CancelAfter(deadline);
+                var runTask = new ExternalToolRunner().RunAsync(
+                    powershell,
+                    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", EncodePowerShell(parentCommand)],
+                    TimeSpan.FromSeconds(120),
+                    cancellation.Token);
+                await WaitForChildProcessStartupAsync(childPidPath, runTask, deadline);
+                cancellation.Cancel();
                 try
                 {
-                    await new ExternalToolRunner().RunAsync(
-                        powershell,
-                        ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", EncodePowerShell(parentCommand)],
-                        // The caller cancellation remains the test deadline. Keep the runner
-                        // timeout longer so CodeQL instrumentation cannot preempt the child
-                        // startup and turn this process-tree security test into a false failure.
-                        TimeSpan.FromSeconds(60),
-                        cancellation.Token);
+                    await runTask;
                 }
                 catch (OperationCanceledException)
                 {
@@ -346,6 +345,22 @@ public sealed class MediaRuntimeCapabilityTests
             // to be gone after the runner terminates the process tree.
             ? TimeSpan.FromSeconds(90)
             : TimeSpan.FromSeconds(8);
+
+    private static async Task WaitForChildProcessStartupAsync(string childPidPath, Task operation, TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (!File.Exists(childPidPath) && stopwatch.Elapsed < timeout)
+        {
+            if (operation.IsCompleted)
+            {
+                await operation;
+            }
+
+            await Task.Delay(25);
+        }
+
+        Assert.True(File.Exists(childPidPath), "The parent probe did not start its child before cancellation.");
+    }
 
     private static async Task AssertProcessExitedAsync(int processId)
     {

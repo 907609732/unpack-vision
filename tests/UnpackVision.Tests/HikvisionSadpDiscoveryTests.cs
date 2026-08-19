@@ -572,18 +572,17 @@ public sealed class HikvisionSadpDiscoveryTests
             var deadline = ProcessTreeTestDeadline();
             if (cancelCaller)
             {
-                cancellation.CancelAfter(deadline);
+                var runTask = new StreamingHikvisionSadpProcessRunner().RunAsync(
+                    powershell,
+                    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", EncodePowerShell(parentCommand)],
+                    TimeSpan.FromSeconds(120),
+                    maximumDevices: 64,
+                    cancellation.Token);
+                await WaitForChildProcessStartupAsync(childPidPath, runTask, deadline);
+                cancellation.Cancel();
                 try
                 {
-                    await new StreamingHikvisionSadpProcessRunner().RunAsync(
-                        powershell,
-                        ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", EncodePowerShell(parentCommand)],
-                        // The caller cancellation remains the test deadline. Keep the runner
-                        // timeout longer so CodeQL instrumentation cannot preempt the child
-                        // startup and turn this process-tree security test into a false failure.
-                        TimeSpan.FromSeconds(60),
-                        maximumDevices: 64,
-                        cancellation.Token);
+                    await runTask;
                 }
                 catch (OperationCanceledException)
                 {
@@ -632,6 +631,22 @@ public sealed class HikvisionSadpDiscoveryTests
             // to be gone after the runner terminates the process tree.
             ? TimeSpan.FromSeconds(90)
             : TimeSpan.FromSeconds(8);
+
+    private static async Task WaitForChildProcessStartupAsync(string childPidPath, Task operation, TimeSpan timeout)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (!File.Exists(childPidPath) && stopwatch.Elapsed < timeout)
+        {
+            if (operation.IsCompleted)
+            {
+                await operation;
+            }
+
+            await Task.Delay(25);
+        }
+
+        Assert.True(File.Exists(childPidPath), "The SADP helper did not start its child before cancellation.");
+    }
 
     private static async Task AssertProcessExitedAsync(int processId)
     {
