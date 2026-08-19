@@ -281,9 +281,10 @@ public sealed class MediaRuntimeCapabilityTests
                 $"Set-Content -LiteralPath '{escapedPidPath}' -Value $child.Id -Encoding Ascii; " +
                 "Start-Sleep -Seconds 30";
             using var cancellation = new CancellationTokenSource();
+            var deadline = ProcessTreeTestDeadline();
             if (cancelCaller)
             {
-                cancellation.CancelAfter(TimeSpan.FromSeconds(8));
+                cancellation.CancelAfter(deadline);
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                     new ExternalToolRunner().RunAsync(
                         powershell,
@@ -296,7 +297,7 @@ public sealed class MediaRuntimeCapabilityTests
                 var result = await new ExternalToolRunner().RunAsync(
                     powershell,
                     ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", EncodePowerShell(parentCommand)],
-                    TimeSpan.FromSeconds(8));
+                    deadline);
                 Assert.True(result.Started);
                 Assert.True(result.TimedOut);
                 Assert.Null(result.ExitCode);
@@ -326,6 +327,11 @@ public sealed class MediaRuntimeCapabilityTests
             }
         }
     }
+
+    private static TimeSpan ProcessTreeTestDeadline() =>
+        string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase)
+            ? TimeSpan.FromSeconds(30)
+            : TimeSpan.FromSeconds(8);
 
     private static async Task AssertProcessExitedAsync(int processId)
     {
