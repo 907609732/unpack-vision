@@ -1,0 +1,27 @@
+name = "unpack-vision-dau"
+main = "src/index.ts"
+compatibility_date = "2026-07-29"
+workers_dev = true
+
+[observability]
+enabled = false
+
+# 后台统计接口默认拒绝访问。启用 Cloudflare Access 后，在账号内设置：
+# TEAM_DOMAIN=https://<team-name>.cloudflareaccess.com
+# POLICY_AUD=<Access Application Audience Tag>
+
+[[d1_databases]]
+binding = "DB"
+database_name = "unpack-vision-dau"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "23001"
+
+  [ratelimits.simple]
+  limit = 10
+  period = 60
+
+[triggers]
+crons = ["17 18 * * *"]

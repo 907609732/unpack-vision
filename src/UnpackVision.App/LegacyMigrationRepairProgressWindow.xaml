@@ -1,0 +1,35 @@
+<Window x:Class="UnpackVision.App.LegacyMigrationRepairProgressWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="修复旧录像迁移" Width="560" SizeToContent="Height" ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner" Background="#F5F7FA" ShowInTaskbar="False">
+  <Border Margin="18" Padding="24" Background="White" BorderBrush="#18000000"
+          BorderThickness="1" CornerRadius="20">
+    <StackPanel>
+      <TextBlock x:Name="TitleText" Text="正在安全核对旧录像"
+                 FontSize="20" FontWeight="SemiBold" Foreground="#1D1D1F" />
+      <TextBlock Text="软件会重新逐个校验源文件和新位置的 SHA-256，备份数据库后才清理完全一致的旧副本。"
+                 Foreground="#6E7279" FontSize="12.5" TextWrapping="Wrap" Margin="0,7,0,0" />
+      <Border Background="#F5F8FC" BorderBrush="#16000000" BorderThickness="1"
+              CornerRadius="14" Padding="16" Margin="0,20,0,0">
+        <StackPanel>
+          <Grid>
+            <TextBlock x:Name="StageText" Text="正在准备校验"
+                       FontWeight="SemiBold" Foreground="#2B3340" />
+            <TextBlock x:Name="PercentText" Text="0%" HorizontalAlignment="Right"
+                       FontWeight="SemiBold" Foreground="#1677FF" />
+          </Grid>
+          <ProgressBar x:Name="RepairProgressBar" Minimum="0" Maximum="100" Height="9"
+                       Margin="0,12,0,0" />
+          <TextBlock x:Name="DetailText" Text="正在读取迁移清单…"
+                     Foreground="#727780" FontSize="12.5" TextWrapping="Wrap" Margin="0,9,0,0" />
+        </StackPanel>
+      </Border>
+      <TextBlock x:Name="ResultText" Visibility="Collapsed" TextWrapping="Wrap"
+                 Foreground="#4E535B" FontSize="12.5" Margin="0,14,0,0" />
+      <Button x:Name="CloseButton" Content="完成" Width="96" HorizontalAlignment="Right"
+              Margin="0,20,0,0" Visibility="Collapsed" IsDefault="True"
+              Click="CloseButton_OnClick" />
+    </StackPanel>
+  </Border>
+</Window>

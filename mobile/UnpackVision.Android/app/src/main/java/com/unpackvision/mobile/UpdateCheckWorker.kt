@@ -49,7 +49,7 @@ class UpdateCheckWorker(
                 "软件更新",
                 NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description = "电商拆包智能录像新版本和安全更新提醒"
+                description = "拆包智录新版本和安全更新提醒"
             }
         )
         val pendingIntent = PendingIntent.getActivity(

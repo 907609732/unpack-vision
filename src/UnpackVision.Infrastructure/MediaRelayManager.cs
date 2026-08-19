@@ -341,7 +341,7 @@ public static class MediaRelayConfiguration
         webrtcServerKey: '{{privateKey}}'
         webrtcServerCert: '{{certificate}}'
         webrtcAllowOrigins: []
-        webrtcLocalUDPAddress: :8189
+        webrtcLocalUDPAddress: :{{options.WebRtcUdpPort}}
         webrtcLocalTCPAddress: ""
         webrtcIPsFromInterfaces: true
         srt: false

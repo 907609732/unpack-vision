@@ -34,8 +34,7 @@ public sealed class StationDiscoveryPublisher(
             _discovery = new ServiceDiscovery();
             _discovery.Advertise(_profile);
             logger.LogInformation(
-                "Station {StationId} advertised as {ServiceType} on port {Port}.",
-                options.StationId,
+                "Station discovery advertised as {ServiceType} on port {Port}.",
                 ServiceType,
                 options.LanHttpsPort);
         }

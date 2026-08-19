@@ -12,15 +12,17 @@ public sealed class RecordingCoordinatorTests : IDisposable
         var repository = new InMemoryRepository();
         var backend = new FakeRecordingBackend(_temp);
         var clock = new FakeClock(new DateTimeOffset(2026, 7, 19, 8, 0, 0, TimeSpan.FromHours(8)));
+        var profile = new ScannerProfile();
         var coordinator = new RecordingCoordinator(
             repository,
             backend,
             new NullEventPublisher(),
             clock,
-            new ScannerProfile());
+            profile);
 
         var started = await coordinator.ProcessScanAsync("SF1234567890\r\n", WorkflowMode.Unpacking);
         var temporaryPathWhileRecording = started.Record?.VideoPath;
+        clock.Now = clock.Now.AddMilliseconds(profile.DebounceMilliseconds + 1);
         var stopped = await coordinator.ProcessScanAsync("SF1234567890\r", WorkflowMode.Unpacking);
 
         Assert.Equal(ScanAction.Started, started.Action);
@@ -34,19 +36,77 @@ public sealed class RecordingCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task ScanningDifferentTrackingStopsCurrentAndStartsNext()
+    public async Task ConcurrentCopiesOfOneScanStartOnlyOneRecording()
     {
         var repository = new InMemoryRepository();
-        var backend = new FakeRecordingBackend(_temp);
+        var backend = new BlockingStartRecordingBackend(_temp);
+        var clock = new FakeClock(new DateTimeOffset(2026, 7, 19, 8, 0, 0, TimeSpan.FromHours(8)));
         var coordinator = new RecordingCoordinator(
             repository,
             backend,
             new NullEventPublisher(),
-            new FakeClock(DateTimeOffset.Now),
+            clock,
             new ScannerProfile());
+
+        var firstTask = coordinator.ProcessScanAsync("TEST-PARCEL-ALPHA", WorkflowMode.Unpacking);
+        await backend.StartEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var mirroredTask = coordinator.ProcessScanAsync("TEST-PARCEL-ALPHA", WorkflowMode.Unpacking);
+        clock.Now = clock.Now.AddSeconds(2);
+        backend.ReleaseStart();
+        var results = await Task.WhenAll(firstTask, mirroredTask);
+
+        Assert.Contains(results, result => result.Action == ScanAction.Started);
+        Assert.Contains(results, result => result.Action == ScanAction.Busy);
+        Assert.Equal(1, backend.StartCount);
+        Assert.Equal(0, backend.StopCount);
+        Assert.Equal(RecordingState.Recording, coordinator.State);
+        Assert.Single(repository.Records);
+    }
+
+    [Fact]
+    public async Task TrailingDuplicateAfterStopDoesNotRestartRecording()
+    {
+        var repository = new InMemoryRepository();
+        var backend = new FakeRecordingBackend(_temp);
+        var clock = new FakeClock(new DateTimeOffset(2026, 7, 19, 8, 0, 0, TimeSpan.FromHours(8)));
+        var profile = new ScannerProfile();
+        var coordinator = new RecordingCoordinator(
+            repository,
+            backend,
+            new NullEventPublisher(),
+            clock,
+            profile);
+
+        await coordinator.ProcessScanAsync("TEST-PARCEL-ALPHA", WorkflowMode.Unpacking);
+        clock.Now = clock.Now.AddMilliseconds(profile.DebounceMilliseconds + 1);
+        var stopped = await coordinator.ProcessScanAsync("TEST-PARCEL-ALPHA", WorkflowMode.Unpacking);
+        var trailingDuplicate = await coordinator.ProcessScanAsync("TEST-PARCEL-ALPHA", WorkflowMode.Unpacking);
+
+        Assert.Equal(ScanAction.Stopped, stopped.Action);
+        Assert.Equal(ScanAction.Busy, trailingDuplicate.Action);
+        Assert.Equal(1, backend.StartCount);
+        Assert.Equal(1, backend.StopCount);
+        Assert.Equal(RecordingState.Idle, coordinator.State);
+        Assert.Single(repository.Records);
+    }
+
+    [Fact]
+    public async Task ScanningDifferentTrackingStopsCurrentAndStartsNext()
+    {
+        var repository = new InMemoryRepository();
+        var backend = new FakeRecordingBackend(_temp);
+        var clock = new FakeClock(DateTimeOffset.Now);
+        var profile = new ScannerProfile();
+        var coordinator = new RecordingCoordinator(
+            repository,
+            backend,
+            new NullEventPublisher(),
+            clock,
+            profile);
 
         var first = await coordinator.ProcessScanAsync("SF1234567890", WorkflowMode.Unpacking);
         var switched = await coordinator.ProcessScanAsync("YT9876543210", WorkflowMode.Unpacking);
+        clock.Now = clock.Now.AddMilliseconds(profile.DebounceMilliseconds + 1);
         var stopped = await coordinator.ProcessScanAsync("YT9876543210", WorkflowMode.Unpacking);
 
         Assert.Equal(ScanAction.Started, first.Action);

@@ -13,11 +13,21 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set version and release channel
+        id: release_channel
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid release tag: $version" }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          $prerelease = if ("${{ vars.WINDOWS_STABLE_SIGNING_READY }}" -eq 'true') { 'false' } else { 'true' }
+          "prerelease=$prerelease" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Set up .NET 10
         uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
@@ -35,14 +45,20 @@ jobs:
 
       - name: Install Android platform
         shell: pwsh
-        run: |
-          sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
+        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0" "platform-tools"
 
       - name: Restore and test .NET
         shell: pwsh
         run: |
           dotnet restore .\UnpackVision.slnx
           dotnet test .\UnpackVision.slnx -c Release --no-restore
+
+      - name: Configure public telemetry endpoint
+        shell: pwsh
+        run: |
+          $endpoint = (Get-Content .\src\UnpackVision.App\Assets\telemetry-endpoint.txt -Raw -Encoding UTF8).Trim()
+          if ($endpoint -and -not [Uri]::IsWellFormedUriString($endpoint, [UriKind]::Absolute)) { throw 'Telemetry endpoint must be an absolute URL.' }
+          "UNPACKVISION_TELEMETRY_ENDPOINT=$endpoint" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Prepare Android release signing
         shell: pwsh
@@ -52,9 +68,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:KEYSTORE_BASE64)) {
-            throw "ANDROID_KEYSTORE_BASE64 is not configured."
-          }
+          if ([string]::IsNullOrWhiteSpace($env:KEYSTORE_BASE64)) { throw "ANDROID_KEYSTORE_BASE64 is not configured." }
           $keystore = Join-Path $env:RUNNER_TEMP "ecommerce-unpack-recorder.jks"
           [IO.File]::WriteAllBytes($keystore, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
           "ANDROID_KEYSTORE_PATH=$keystore" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -64,11 +78,7 @@ jobs:
 
       - name: Test and build signed Android APK
         shell: pwsh
-        run: |
-          .\mobile\UnpackVision.Android\gradlew.bat `
-            -p .\mobile\UnpackVision.Android `
-            app:testDebugUnitTest app:assembleRelease `
-            --no-daemon --console=plain
+        run: .\mobile\UnpackVision.Android\gradlew.bat -p .\mobile\UnpackVision.Android app:testDebugUnitTest app:assembleRelease --no-daemon --console=plain
 
       - name: Download previous Velopack packages for delta updates
         shell: pwsh
@@ -76,24 +86,66 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           New-Item -ItemType Directory -Force -Path .\artifacts\velopack-release | Out-Null
-          gh release download `
-            --repo ${{ github.repository }} `
-            --pattern "releases.win.json" `
-            --pattern "*.nupkg" `
-            --dir .\artifacts\velopack-release `
-            --clobber 2>$null
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "No previous Velopack release is available; building the initial full package."
-            $global:LASTEXITCODE = 0
-          }
+          gh release download --repo ${{ github.repository }} --pattern "releases.win.json" --pattern "*.nupkg" --dir .\artifacts\velopack-release --clobber 2>$null
+          if ($LASTEXITCODE -ne 0) { $global:LASTEXITCODE = 0 }
+
+      - name: Build Windows application
+        shell: pwsh
+        run: .\scripts\publish.ps1 -AppFolder ("staging\\${{ steps.release_channel.outputs.version }}\\App")
+
+      - name: Sign Windows application with SignPath
+        if: ${{ vars.WINDOWS_STABLE_SIGNING_READY == 'true' }}
+        uses: SignPath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_APPLICATION_ARTIFACT_CONFIGURATION_SLUG }}
+          input-artifact-path: artifacts/publish/staging/${{ steps.release_channel.outputs.version }}/App
+          output-artifact-path: artifacts/publish/staging/${{ steps.release_channel.outputs.version }}/App
+
+      - name: Verify audited media runtime package
+        shell: pwsh
+        run: |
+          $publishRoot = ".\artifacts\publish\staging\${{ steps.release_channel.outputs.version }}\App"
+          .\scripts\verify-media-runtime-package.ps1 -RuntimeRoot (Join-Path $publishRoot "runtimes\gstreamer\1.28.5")
+          .\scripts\verify-hikvision-sadp-package.ps1 -RuntimeRoot (Join-Path $publishRoot "runtimes\hikvision-tooling\1.0.43")
 
       - name: Build Windows installer and release files
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
-          .\scripts\package-release.ps1 `
-            -Version $version `
-            -AndroidApk .\mobile\UnpackVision.Android\app\build\outputs\apk\release\app-release.apk
+          .\scripts\package-release.ps1 -Version ${{ steps.release_channel.outputs.version }} -SkipPublish -AndroidApk .\mobile\UnpackVision.Android\app\build\outputs\apk\release\app-release.apk
+
+      - name: Sign Windows installers with SignPath
+        if: ${{ vars.WINDOWS_STABLE_SIGNING_READY == 'true' }}
+        uses: SignPath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_INSTALLER_ARTIFACT_CONFIGURATION_SLUG }}
+          input-artifact-path: artifacts/release-output/*Setup.exe
+          output-artifact-path: artifacts/release-output
+
+      - name: Verify stable Windows signatures
+        if: ${{ vars.WINDOWS_STABLE_SIGNING_READY == 'true' }}
+        shell: pwsh
+        run: |
+          $artifacts = Get-ChildItem .\artifacts\release-output -Filter '*Setup.exe' -File
+          foreach ($artifact in $artifacts) {
+            if ((Get-AuthenticodeSignature $artifact.FullName).Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+              throw "Windows installer signature is invalid: $($artifact.Name)"
+            }
+          }
+
+      - name: Refresh release checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem .\artifacts\release-output -File | Where-Object Name -ne 'SHA256SUMS.txt' |
+            Sort-Object Name | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $_.Name } |
+            Set-Content .\artifacts\release-output\SHA256SUMS.txt -Encoding ASCII
 
       - name: Attest build provenance
         uses: actions/attest@36051bcae73b7c2a8a6945a48cbf80953c6baa35 # v4
@@ -103,7 +155,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          body_path: docs/releases/2.2.0.md
+          body_path: docs/releases/${{ steps.release_channel.outputs.version }}.md
           files: artifacts/release-output/*
           fail_on_unmatched_files: true
-          prerelease: true
+          prerelease: ${{ steps.release_channel.outputs.prerelease }}

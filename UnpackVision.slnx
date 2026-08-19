@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/UnpackVision.Application/UnpackVision.Application.csproj" />
     <Project Path="src/UnpackVision.Core/UnpackVision.Core.csproj" />
     <Project Path="src/UnpackVision.Infrastructure/UnpackVision.Infrastructure.csproj" />
     <Project Path="src/UnpackVision.Service/UnpackVision.Service.csproj" />

@@ -6,6 +6,8 @@ public partial class FirstRunConsentWindow : Window
 {
     public FirstRunConsentWindow() => InitializeComponent();
 
+    public bool TelemetryEnabled => TelemetryCheck.IsChecked == true;
+
     private void AcceptCheck_OnChanged(object sender, RoutedEventArgs e) =>
         AcceptButton.IsEnabled = AcceptCheck.IsChecked == true;
 
