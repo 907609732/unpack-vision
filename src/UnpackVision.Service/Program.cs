@@ -4,7 +4,7 @@ using UnpackVision.Infrastructure;
 using UnpackVision.Infrastructure.Diagnostics;
 using UnpackVision.Service;
 
-DiagnosticLog.Initialize("sync-service", "2.5.2");
+DiagnosticLog.Initialize("sync-service", "2.5.3");
 DiagnosticLog.RegisterGlobalExceptionHandlers();
 DiagnosticLog.Information("兼容同步服务正在启动");
 

@@ -1,6 +1,6 @@
-# Third-party components for 2.5.2
+# Third-party components for 2.5.3
 
-The following components are used or fetched by the 2.5.2 prerelease branch. Their source code is not copied into this repository unless the upstream package itself is restored by the standard build tool.
+The following components are used or fetched by the 2.5.3 prerelease branch. Their source code is not copied into this repository unless the upstream package itself is restored by the standard build tool.
 
 | Component | Version | License | Purpose | Source |
 | --- | --- | --- | --- | --- |

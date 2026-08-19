@@ -24,7 +24,7 @@ Windows 端使用 Velopack 每用户安装器，后续更新由软件后台下�
 - 异常标签与备注：录像中可扫描固定“破损”“调包”指令条码或点击快捷按钮，一个包裹可有多个标签并可撤销；备注 500ms 自动保存。异常会进入实时水印、录像文件名、SQLite、历史检索与 Excel E 列，人工 Excel 备注不会被覆盖。
 - 热敏条码设计器：录像不中断即可切换页面；支持文本、图片/Logo、Code 128、二维码、直线、矩形、拖动缩放、旋转、图层、对齐、复制粘贴、撤销重做、毫米尺寸、打印偏移、Excel/CSV 字段映射、批量份数、版本化 JSON 模板和 Windows 打印机驱动。
 - 相机录像：当前兼容路径使用 Windows Media Foundation + OpenCV，默认请求 3840x2160、15fps；自动探测满足分辨率的设备并排除不合格的虚拟相机，录像叠加时间与单号水印，先写临时文件，成功关闭编码器后再改为正式 MP4 文件名。
-- 2.5.2 多路预览基础：机位模型和主页布局支持 1、2、3、4、8、16 画面，预览分配不改变录像机位所有权；录像后端为各机位和可选合成片使用独立写入循环。1 至 4 路默认生成合成片，5 路以上默认优先保存各机位原片。
+- 2.5.3 多路预览基础：机位模型和主页布局支持 1、2、3、4、8、16 画面，预览分配不改变录像机位所有权；录像后端为各机位和可选合成片使用独立写入循环。1 至 4 路默认生成合成片，5 路以上默认优先保存各机位原片。
 - 多硬盘存储池基础：旧录像目录自动成为第一个盘位；开始一单前把所有机位媒体整单分配到一个健康盘位，并按剩余百分比、预计可录时长和安全保留空间决定警告或拒绝。增加、删除、排序盘位不会移动已有录像。
 - 生产媒体运行时检查：源码固定探测 GStreamer 1.28.5、必需插件和可实际启动的 H.264 编码器，并单独审计 FFmpeg 8.1.2 是否符合 LGPL 发布白名单。探测能力不等于当前电脑已安装运行时，也不等于 8/16 路实机验收已经完成。
 - 视频源选择：主界面可在自动模式和 16 个本地相机序号间快速切换；指定本地相机时接受实际分辨率，支持 USB/UVC、iVCam 等 Windows 摄像头。设置页还支持通用 RTSP/HTTP IPC 视频流，以及按地址、端口、通道和主/子码流配置海康 NVR/DVR；网络密码使用 Windows DPAPI 加密保存。
@@ -40,7 +40,7 @@ Windows 端使用 Velopack 每用户安装器，后续更新由软件后台下�
 
 ## 隐私、安全、迁移与安卓协同
 
-当前 2.5.2 在原有局域网协同和四机位能力上增加 8/16 路、多硬盘工程基础及 IPC 自动扫描，并修复录像迁移源副本清理和扫码串码，但仍是预发布验证版本：
+当前 2.5.3 在原有局域网协同和四机位能力上增加 8/16 路、多硬盘工程基础及 IPC 自动扫描，并修复录像迁移源副本清理、扫码串码和 GitHub Release 测试门禁，但仍是预发布验证版本：
 
 - 产品配置上限为 16 个 USB、虚拟、手机、IPC 或海康录像机通道；每台电脑真正可启用的路数仍必须由全链路性能测试决定。
 - 1 至 4 路默认保存各机位原片和 1080p 合成视频；5 至 16 路默认关闭合成片以优先保护独立原片。
@@ -205,12 +205,12 @@ powershell -ExecutionPolicy Bypass -File .\scripts\fetch-mediamtx.ps1
 
 发布结果保存在 `artifacts\release-output`。Windows 安装器把桌面端、`StationHost`、兼容同步服务和带许可证的 MediaMTX 作为同一版本整体更新；安卓端生成固定文件名 APK、更新清单和 SHA256。
 
-生成完整 2.5.2 预发布文件：
+生成完整 2.5.3 预发布文件：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-signed-android.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1 `
-  -Version 2.5.2 `
+  -Version 2.5.3 `
   -AndroidApk .\mobile\UnpackVision.Android\app\build\outputs\apk\release\app-release.apk
 ```
 
@@ -230,7 +230,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1 `
 - [2.3.0 发布说明](docs/releases/2.3.0.md)
 - [2.3.2 发布说明](docs/releases/2.3.2.md)
 - [2.4.0 发布说明](docs/releases/2.4.0.md)
-- [2.5.2 预发布说明](docs/releases/2.5.2.md)
+- [2.5.3 预发布说明](docs/releases/2.5.3.md)
 - [2.5.1 预发布说明](docs/releases/2.5.1.md)
 - [2.5.0 预发布说明](docs/releases/2.5.0.md)
 

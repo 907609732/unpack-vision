@@ -22,7 +22,7 @@ internal static class ProductInfo
     internal static string Version =>
         Assembly.GetExecutingAssembly().GetName().Version is { } version
             ? $"{version.Major}.{version.Minor}.{version.Build}"
-            : "2.5.2";
+            : "2.5.3";
 
     private static string ReadOptionalAsset(string relativePath)
     {

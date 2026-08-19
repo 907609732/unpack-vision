@@ -16,7 +16,7 @@ using UnpackVision.Infrastructure.Diagnostics;
 using UnpackVision.StationHost;
 using static UnpackVision.StationHost.StationHostEndpointSupport;
 
-DiagnosticLog.Initialize("station-host", "2.5.2");
+DiagnosticLog.Initialize("station-host", "2.5.3");
 DiagnosticLog.RegisterGlobalExceptionHandlers();
 DiagnosticLog.Information("工位主机正在启动");
 
@@ -254,7 +254,7 @@ app.MapGet("/api/v1/health", (HttpContext context) =>
     // host must restart before a pairing QR can safely advertise the new IP.
     return Results.Ok(BuildHealthPayload(
         IsLoopback(context),
-        "2.5.2",
+        "2.5.3",
         stationOptions.LanHttpsEnabled,
         lanAddresses,
         DateTimeOffset.Now));
