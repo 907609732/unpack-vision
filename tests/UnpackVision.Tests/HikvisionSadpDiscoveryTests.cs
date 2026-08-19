@@ -626,7 +626,11 @@ public sealed class HikvisionSadpDiscoveryTests
 
     private static TimeSpan ProcessTreeTestDeadline() =>
         string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"), "true", StringComparison.OrdinalIgnoreCase)
-            ? TimeSpan.FromSeconds(30)
+            // CodeQL instruments the xUnit host and can delay a nested PowerShell
+            // process well beyond the normal desktop startup budget. This is only
+            // a test startup allowance; the assertion still requires the child PID
+            // to be gone after the runner terminates the process tree.
+            ? TimeSpan.FromSeconds(90)
             : TimeSpan.FromSeconds(8);
 
     private static async Task AssertProcessExitedAsync(int processId)
