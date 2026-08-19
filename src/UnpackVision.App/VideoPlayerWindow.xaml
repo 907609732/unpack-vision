@@ -1,32 +1,83 @@
 <Window x:Class="UnpackVision.App.VideoPlayerWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Width="1180" Height="760" MinWidth="760" MinHeight="500"
+        Width="1240" Height="800" MinWidth="820" MinHeight="560"
         Background="#090B10" WindowStartupLocation="CenterOwner"
         WindowStyle="None" ResizeMode="CanResizeWithGrip"
         KeyDown="Window_OnKeyDown">
   <Grid>
-    <MediaElement x:Name="Player" LoadedBehavior="Manual" UnloadedBehavior="Stop" Stretch="Uniform"
-                  MediaOpened="Player_OnMediaOpened" MediaEnded="Player_OnMediaEnded" />
-    <Border VerticalAlignment="Top" Background="#B20A0C12" Padding="16,11">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="52" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <Border Grid.Row="0" Background="#F00A0C12" Padding="16,11">
       <Grid>
-        <TextBox x:Name="TitleText" Style="{StaticResource SelectableText}" Foreground="White"
-                 FontWeight="SemiBold" MaxWidth="760" HorizontalAlignment="Left" />
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <StackPanel>
+          <TextBox x:Name="TitleText" Style="{StaticResource SelectableText}" Foreground="White"
+                   FontWeight="SemiBold" FontSize="14" MaxWidth="760" HorizontalAlignment="Left" />
+          <TextBlock x:Name="SelectionSummaryText" Foreground="#AAB3C2" FontSize="11" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
           <Button Content="—" Width="38" Padding="5" Background="Transparent" Click="Minimize_OnClick" />
           <Button Content="□" Width="38" Padding="5" Background="Transparent" Click="Maximize_OnClick" />
           <Button Content="×" Width="38" Padding="5" Background="#CCDE4242" Click="Close_OnClick" />
         </StackPanel>
       </Grid>
     </Border>
-    <Border VerticalAlignment="Bottom" Background="#CC090B10" Padding="18,12">
+
+    <Border Grid.Row="1" Background="#D50F121A" BorderBrush="#263041" BorderThickness="0,1,0,1" Padding="16,9">
       <Grid>
-        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <ItemsControl x:Name="IssueTimelineControl" Margin="88,0,0,9">
-          <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+        <TextBlock Text="同步画面" Foreground="White" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,14,0" />
+        <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+          <ItemsControl x:Name="CameraAnglesControl">
+            <ItemsControl.ItemsPanel>
+              <ItemsPanelTemplate><StackPanel Orientation="Horizontal" /></ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <CheckBox Tag="{Binding Id}" IsChecked="{Binding IsSelected, Mode=OneWay}"
+                          Checked="CameraAngle_OnChecked" Unchecked="CameraAngle_OnUnchecked"
+                          Margin="0,0,14,0" VerticalAlignment="Center" Foreground="White">
+                  <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding DisplayName}" Foreground="White" />
+                    <TextBlock Text="  " />
+                    <TextBlock Text="{Binding AvailabilityText}" Foreground="#8EA0B8" FontSize="11" />
+                  </StackPanel>
+                </CheckBox>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </ScrollViewer>
+        <TextBlock Grid.Column="2" x:Name="PlaybackStatusText" Foreground="#91A7C5" VerticalAlignment="Center" Margin="16,0,0,0" />
+      </Grid>
+    </Border>
+
+    <Grid Grid.Row="2" x:Name="PlaybackGrid" Margin="8" Background="#05070A" />
+
+    <Border Grid.Row="3" Background="#F0090B10" BorderBrush="#263041" BorderThickness="0,1,0,0" Padding="18,10,18,14">
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <ItemsControl x:Name="IssueTimelineControl" Margin="96,0,0,9">
+          <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
           <ItemsControl.ItemTemplate>
             <DataTemplate>
-              <Button Tag="{Binding}" Click="IssueMarker_OnClick" Padding="10,5" Margin="0,0,7,0" Background="#D94A2727" BorderBrush="#77FF6B6B">
+              <Button Tag="{Binding}" Click="IssueMarker_OnClick" Padding="10,5" Margin="0,0,7,0"
+                      Background="#D94A2727" BorderBrush="#77FF6B6B">
                 <TextBlock Foreground="White"><Run Text="异常："/><Run Text="{Binding TagName}"/><Run Text="  "/><Run Text="{Binding TaggedAt, StringFormat=HH:mm:ss}"/></TextBlock>
               </Button>
             </DataTemplate>
@@ -37,12 +88,20 @@
             <ColumnDefinition Width="Auto" />
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="Auto" />
           </Grid.ColumnDefinitions>
-          <Button x:Name="PlayPauseButton" Content="暂停" Width="72" Click="PlayPause_OnClick" />
+          <Button x:Name="PlayPauseButton" Content="暂停" Width="78" Click="PlayPause_OnClick" />
           <Slider x:Name="ProgressSlider" Grid.Column="1" Margin="16,0" Minimum="0" Maximum="1"
                   PreviewMouseDown="ProgressSlider_OnPreviewMouseDown" PreviewMouseUp="ProgressSlider_OnPreviewMouseUp" />
           <TextBox x:Name="TimeText" Grid.Column="2" Style="{StaticResource SelectableText}"
-                   Foreground="White" VerticalAlignment="Center" Text="00:00 / 00:00" />
+                   Foreground="White" VerticalAlignment="Center" Text="00:00 / 00:00" MinWidth="112" />
+          <ComboBox x:Name="SpeedComboBox" Grid.Column="3" Width="76" Margin="14,0,0,0"
+                    SelectedIndex="1" SelectionChanged="SpeedComboBox_OnSelectionChanged">
+            <ComboBoxItem Content="0.5×" Tag="0.5" />
+            <ComboBoxItem Content="1.0×" Tag="1" />
+            <ComboBoxItem Content="1.5×" Tag="1.5" />
+            <ComboBoxItem Content="2.0×" Tag="2" />
+          </ComboBox>
         </Grid>
       </Grid>
     </Border>

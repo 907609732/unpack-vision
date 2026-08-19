@@ -88,6 +88,8 @@ public sealed class MediaGap
 {
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid RecordId { get; set; }
+    public Guid? MediaAssetId { get; set; }
+    public string CameraId { get; set; } = string.Empty;
     public DateTimeOffset StartedAt { get; set; }
     public DateTimeOffset EndedAt { get; set; }
     public bool Recovered { get; set; }
@@ -155,7 +157,29 @@ public sealed record StationRecordView(
     bool HasVideo,
     long? VideoBytes,
     bool HasThumbnail,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    MediaIntegrityStatus MediaIntegrity = MediaIntegrityStatus.Complete,
+    Guid? DefaultMediaAssetId = null,
+    IReadOnlyList<StationMediaAssetView>? MediaAssets = null);
+
+public sealed record StationMediaAssetView(
+    Guid Id,
+    string CameraId,
+    string DisplayName,
+    RecordMediaRole Role,
+    int Width,
+    int Height,
+    double FramesPerSecond,
+    long StartOffsetMilliseconds,
+    MediaIntegrityStatus Integrity,
+    bool HasVideo,
+    string? StorageTargetId = null,
+    string? Codec = null,
+    string? EncoderName = null,
+    bool HardwareAccelerated = false,
+    bool WatermarkBurnedIn = true,
+    long DurationMilliseconds = 0,
+    int SegmentCount = 0);
 
 public sealed record CursorPage<T>(
     IReadOnlyList<T> Items,

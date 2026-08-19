@@ -20,4 +20,10 @@ internal static class StartupRegistration
             ?? Registry.CurrentUser.CreateSubKey(RunKeyPath, writable: true);
         key.SetValue(ValueName, $"\"{executable}\"", RegistryValueKind.String);
     }
+
+    internal static void RemoveCurrentUserStartup()
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, writable: true);
+        key?.DeleteValue(ValueName, throwOnMissingValue: false);
+    }
 }

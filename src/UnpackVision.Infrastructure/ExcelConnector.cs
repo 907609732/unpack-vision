@@ -13,8 +13,8 @@ public sealed class WorkbookLockedException(string message, Exception? innerExce
 public sealed class ExcelConnector : ISyncConnector
 {
     private const string SyncSheetName = "__UnpackVisionSync";
-    private const string AnnotationPrefix = "【电商拆包智能录像】";
-    private static readonly string[] OwnedAnnotationPrefixes = [AnnotationPrefix, "【拆包智录】"];
+    private const string AnnotationPrefix = "【拆包智录】";
+    private static readonly string[] OwnedAnnotationPrefixes = [AnnotationPrefix, "【电商拆包智能录像】"];
     private const string DefaultDateFormatCode = "m\"月\"d\"日\"";
     private static readonly double MinimumSupportedOaDate = new DateTime(2000, 1, 1).ToOADate();
     private static readonly double MaximumSupportedOaDate = new DateTime(2100, 12, 31, 23, 59, 59).ToOADate();
@@ -165,6 +165,7 @@ public sealed class ExcelConnector : ISyncConnector
             ?? throw new InvalidOperationException($"找不到工作表：{_options.WorksheetName}");
         var targetPart = (WorksheetPart)workbookPart.GetPartById(targetSheet.Id!);
         var targetWorksheet = targetPart.Worksheet ?? throw new InvalidDataException("目标工作表内容为空");
+        var associationFormulaEnabled = HasLegacyAssociationSheets(workbook);
         var syncPart = GetOrCreateSyncSheet(workbookPart);
         var syncWorksheet = syncPart.Worksheet ?? throw new InvalidDataException("同步标记工作表内容为空");
         var sheetData = targetWorksheet.GetFirstChild<SheetData>()
@@ -194,7 +195,9 @@ public sealed class ExcelConnector : ISyncConnector
         row.Append(
             CreateDateCell("A", rowIndex, record.ScannedAt, dateStyle),
             CreateTextCell("B", rowIndex, record.TrackingNo, StyleOf(lastDataRow, "B")),
-            CreateFormulaCell("C", rowIndex, AssociationFormula(rowIndex), StyleOf(lastDataRow, "C")),
+            associationFormulaEnabled
+                ? CreateFormulaCell("C", rowIndex, AssociationFormula(rowIndex), StyleOf(lastDataRow, "C"))
+                : CreateBlankCell("C", rowIndex, StyleOf(lastDataRow, "C")),
             CreateBlankCell("D", rowIndex, StyleOf(lastDataRow, "D")),
             string.IsNullOrWhiteSpace(BuildAnnotation(record))
                 ? CreateBlankCell("E", rowIndex, StyleOf(lastDataRow, "E"))
@@ -480,7 +483,7 @@ public sealed class ExcelConnector : ISyncConnector
         }
     }
 
-    internal static string BuildAnnotation(ScanRecord record)
+    public static string BuildAnnotation(ScanRecord record)
     {
         var tags = record.Tags.Where(item => item.IsActive).OrderBy(item => item.TaggedAt)
             .Select(item => item.TagName).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
@@ -492,6 +495,18 @@ public sealed class ExcelConnector : ISyncConnector
         if (!string.IsNullOrWhiteSpace(record.Note))
         {
             parts.Add($"备注：{record.Note.Trim().Replace("\r", " ").Replace("\n", " ")}");
+        }
+        if (record.MediaIntegrity == MediaIntegrityStatus.Partial)
+        {
+            var incomplete = record.MediaAssets
+                .Where(asset => asset.Integrity != MediaIntegrityStatus.Complete)
+                .Select(asset => asset.DisplayName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            parts.Add(incomplete.Length == 0
+                ? "多机位不完整"
+                : $"多机位不完整：{string.Join('、', incomplete)}");
         }
         return AnnotationPrefix + string.Join("；", parts);
     }
@@ -554,6 +569,16 @@ public sealed class ExcelConnector : ISyncConnector
 
     private static string AssociationFormula(uint row) =>
         $"IF(COUNTIF('店口五金-拼多多'!B:B,B{row})+COUNTIF('店口五金-淘宝'!B:B,B{row})+COUNTIF('店口五金-京东'!B:B,B{row})>0,\"单号已关联\",\"无头件\")";
+
+    private static bool HasLegacyAssociationSheets(Workbook workbook)
+    {
+        var names = workbook.Sheets?.Elements<Sheet>()
+            .Select(item => item.Name?.Value ?? string.Empty)
+            .ToHashSet(StringComparer.Ordinal) ?? [];
+        return names.Contains("店口五金-拼多多") &&
+               names.Contains("店口五金-淘宝") &&
+               names.Contains("店口五金-京东");
+    }
 
     private static UInt32Value? StyleOf(Row? row, string column) => FindCell(row, column)?.StyleIndex;
 

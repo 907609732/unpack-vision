@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Version = '2.2.0',
+    [string]$Version = '2.5.2',
     [string]$AndroidApk,
     [switch]$SkipPublish,
     [switch]$RebuildExisting
@@ -15,6 +15,17 @@ $releaseDirectory = Join-Path $repositoryRoot 'artifacts\release-output'
 $toolDirectory = Join-Path $repositoryRoot 'artifacts\tools'
 $iconPath = Join-Path $repositoryRoot 'src\UnpackVision.App\Assets\EcommerceUnpackRecorder.ico'
 $releaseNotes = Join-Path $repositoryRoot "docs\releases\$Version.md"
+$parsedVersion = $null
+if (-not [Version]::TryParse($Version, [ref]$parsedVersion) -or
+    $parsedVersion.Major -gt 2147 -or
+    $parsedVersion.Minor -gt 99 -or
+    $parsedVersion.Build -gt 99) {
+    throw "Version must be numeric major.minor.patch with minor and patch below 100: $Version"
+}
+$versionCode = [int](
+    $parsedVersion.Major * 10000 +
+    $parsedVersion.Minor * 100 +
+    [Math]::Max(0, $parsedVersion.Build))
 
 if (-not $SkipPublish) {
     & (Join-Path $PSScriptRoot 'publish.ps1') -AppFolder $publishFolder
@@ -28,6 +39,12 @@ $mainExecutable = Get-ChildItem -LiteralPath $publishDirectory -Filter '*.exe' -
 if ($null -eq $mainExecutable) {
     throw "The published desktop executable was not found in $publishDirectory"
 }
+$runtimeDirectory = Join-Path $publishDirectory 'runtimes\gstreamer\1.28.5'
+& (Join-Path $PSScriptRoot 'verify-media-runtime-package.ps1') -RuntimeRoot $runtimeDirectory
+if ($LASTEXITCODE -ne 0) { throw 'The audited media runtime gate failed before packaging.' }
+$sadpRuntimeDirectory = Join-Path $publishDirectory 'runtimes\hikvision-tooling\1.0.43'
+& (Join-Path $PSScriptRoot 'verify-hikvision-sadp-package.ps1') -RuntimeRoot $sadpRuntimeDirectory
+if ($LASTEXITCODE -ne 0) { throw 'The pinned Hikvision SADP runtime gate failed before packaging.' }
 $productName = [System.IO.Path]::GetFileNameWithoutExtension($mainExecutable.Name)
 
 foreach ($required in @($iconPath, $releaseNotes)) {
@@ -119,7 +136,7 @@ if (-not [string]::IsNullOrWhiteSpace($AndroidApk)) {
     $apkHash = (Get-FileHash -LiteralPath $apkDestination -Algorithm SHA256).Hash.ToLowerInvariant()
     $mobileManifest = @{
         versionName = $Version
-        versionCode = 20200
+        versionCode = $versionCode
         apkUrl = 'https://github.com/907609732/unpack-vision/releases/latest/download/EcommerceUnpackRecorder-Android.apk'
         sha256 = $apkHash
         minSdk = 26
@@ -148,6 +165,10 @@ $desktopManifest = @{
     [Text.UTF8Encoding]::new($false))
 
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'THIRD_PARTY_NOTICES.md') -Destination $releaseDirectory -Force
+Copy-Item `
+    -LiteralPath (Join-Path $runtimeDirectory 'runtime-manifest.json') `
+    -Destination (Join-Path $releaseDirectory 'media-runtime-manifest.json') `
+    -Force
 
 $hashLines = Get-ChildItem -LiteralPath $releaseDirectory -File |
     Where-Object Name -ne 'SHA256SUMS.txt' |

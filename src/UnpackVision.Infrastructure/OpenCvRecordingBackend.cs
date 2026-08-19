@@ -1,6 +1,4 @@
 using OpenCvSharp;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
 using UnpackVision.Core;
 
 namespace UnpackVision.Infrastructure;
@@ -17,6 +15,18 @@ public sealed class CameraErrorEventArgs(Exception error) : EventArgs
     public Exception Error { get; } = error;
 }
 
+public sealed class RawCameraFrameEventArgs(
+    string cameraId,
+    string displayName,
+    Mat frame,
+    DateTimeOffset capturedAt) : EventArgs
+{
+    public string CameraId { get; } = cameraId;
+    public string DisplayName { get; } = displayName;
+    public Mat Frame { get; } = frame;
+    public DateTimeOffset CapturedAt { get; } = capturedAt;
+}
+
 public sealed record CameraRuntimeInfo(int Width, int Height, double FramesPerSecond, int CameraIndex, string DisplayName);
 
 public sealed class OpenCvRecordingBackend : IRecordingBackend
@@ -27,6 +37,9 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
     private readonly object _frameSync = new();
     private readonly StorageOptions _storageOptions;
     private readonly CameraOptions _cameraOptions;
+    private readonly string _cameraId;
+    private readonly string _configuredDisplayName;
+    private readonly int _previewFrameStride;
     private VideoCapture? _capture;
     private VideoWriter? _writer;
     private CancellationTokenSource? _cameraCancellation;
@@ -45,14 +58,27 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
     private string _activeCameraDisplayName = string.Empty;
     private bool _disposed;
 
-    public OpenCvRecordingBackend(StorageOptions storageOptions, CameraOptions cameraOptions)
+    public OpenCvRecordingBackend(
+        StorageOptions storageOptions,
+        CameraOptions cameraOptions,
+        string cameraId = "primary",
+        string configuredDisplayName = "主机位",
+        int previewFrameStride = 3,
+        int initialRotationQuarterTurns = 0,
+        bool initialMirror = false)
     {
         _storageOptions = storageOptions;
         _cameraOptions = cameraOptions;
+        _cameraId = cameraId;
+        _configuredDisplayName = configuredDisplayName;
+        _previewFrameStride = Math.Max(1, previewFrameStride);
+        _rotationQuarterTurns = (initialRotationQuarterTurns % 4 + 4) % 4;
+        _mirror = initialMirror;
     }
 
     public event EventHandler<PreviewFrameEventArgs>? PreviewFrameReady;
     public event EventHandler<CameraErrorEventArgs>? CameraError;
+    public event EventHandler<RawCameraFrameEventArgs>? RawFrameReady;
 
     public bool IsPreviewing => _captureLoop is { IsCompleted: false };
     public bool IsRecording => _activeSession is not null;
@@ -67,6 +93,29 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
         {
             ThrowIfDisposed();
             await Task.Run(EnsureCameraStartedCore, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Releases the capture device without disposing the backend. Configuration preview uses
+    /// this to lend an exclusive USB camera to a temporary one-camera preview and then resume
+    /// the normal station preview afterwards.
+    /// </summary>
+    public async Task StopPreviewAsync(CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ThrowIfDisposed();
+            if (_activeSession is not null)
+            {
+                throw new InvalidOperationException("录像过程中不能停止相机预览");
+            }
+            await StopCameraCoreAsync(cancellationToken);
         }
         finally
         {
@@ -425,11 +474,14 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
             return OpenNetworkStream();
         }
 
+        var stableIndex = ResolveStableCameraIndex();
         var indices = _cameraOptions.AutoSelectBestCamera
             ? Enumerable.Repeat(_cameraOptions.CameraIndex, 1)
+                .Prepend(stableIndex)
                 .Concat(Enumerable.Range(0, Math.Max(1, _cameraOptions.ProbeCameraCount)))
+                .Where(index => index >= 0)
                 .Distinct()
-            : [_cameraOptions.CameraIndex];
+            : [stableIndex >= 0 ? stableIndex : _cameraOptions.CameraIndex];
         var openedAny = false;
         var foundResolutions = new List<string>();
         var bestFallbackIndex = -1;
@@ -463,9 +515,9 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
                     _cameraOptions.MinimumResolutionRatio))
             {
                 _activeCameraIndex = index;
-                _activeCameraDisplayName = _cameraOptions.AutoSelectBestCamera
-                    ? $"自动选择 · 本地相机 {index + 1}"
-                    : $"本地相机 {index + 1}";
+                _activeCameraDisplayName = string.IsNullOrWhiteSpace(_configuredDisplayName)
+                    ? (_cameraOptions.AutoSelectBestCamera ? $"自动选择 · 本地相机 {index + 1}" : $"本地相机 {index + 1}")
+                    : _configuredDisplayName;
                 return candidate;
             }
 
@@ -494,6 +546,19 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
             : "未找到可用摄像头";
         throw new InvalidOperationException(
             $"{reason}。如果 4K USB Camera 正被 HIK SCAN 使用，请先关闭 HIK SCAN；也可在设置中选择相机序号或降低分辨率。");
+    }
+
+    private int ResolveStableCameraIndex()
+    {
+        if (string.IsNullOrWhiteSpace(_cameraOptions.WindowsSymbolicLink))
+        {
+            return -1;
+        }
+        return WindowsCameraDiscovery.Enumerate()
+            .FirstOrDefault(device => string.Equals(
+                device.SymbolicLink,
+                _cameraOptions.WindowsSymbolicLink,
+                StringComparison.OrdinalIgnoreCase))?.Index ?? -1;
     }
 
     private void ConfigureLocalCamera(VideoCapture candidate)
@@ -560,12 +625,22 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
                     session = _activeSession;
                     if (session is not null)
                     {
-                        DrawRecordingWatermark(frame, session, _activeIssueTags);
+                        RecordingOverlayRenderer.Draw(frame, session, _activeIssueTags);
                     }
                     _writer?.Write(frame);
                 }
 
-                if (++_previewFrameCounter % 3 == 0)
+                if (RawFrameReady is not null)
+                {
+                    using var eventFrame = frame.Clone();
+                    RawFrameReady.Invoke(this, new RawCameraFrameEventArgs(
+                        _cameraId,
+                        _configuredDisplayName,
+                        eventFrame,
+                        DateTimeOffset.Now));
+                }
+
+                if (++_previewFrameCounter % _previewFrameStride == 0)
                 {
                     lock (_frameSync)
                     {
@@ -662,87 +737,6 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
         return resized;
     }
 
-    private static void DrawRecordingWatermark(Mat frame, RecordingSession session, IReadOnlyList<RecordTagAssignment> issueTags)
-    {
-        var scale = Math.Max(0.8, frame.Width / 1920d);
-        var thickness = Math.Max(2, (int)Math.Round(scale * 2));
-        var x = Math.Max(18, frame.Width / 100);
-        var y = Math.Max(42, frame.Height / 22);
-        DrawOutlinedText(frame, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), new Point(x, y), scale, thickness);
-        DrawChineseTrackingText(frame, session.TrackingNo, x, y + (int)(12 * scale), scale, thickness);
-        var line = 0;
-        foreach (var tag in issueTags.Where(item => item.IsActive).Take(4))
-        {
-            DrawChineseText(
-                frame,
-                $"异常：{tag.TagName} {tag.TaggedAt.LocalDateTime:HH:mm:ss}",
-                x,
-                y + (int)((52 + line * 36) * scale),
-                scale * 0.88,
-                thickness,
-                System.Drawing.Color.FromArgb(255, 255, 75, 75));
-            line++;
-        }
-    }
-
-    private static void DrawChineseTrackingText(Mat frame, string trackingNo, int x, int y, double scale, int thickness)
-        => DrawChineseText(frame, $"快递单号：{trackingNo}", x, y, scale, thickness, System.Drawing.Color.White);
-
-    private static void DrawChineseText(
-        Mat frame,
-        string text,
-        int x,
-        int y,
-        double scale,
-        int thickness,
-        System.Drawing.Color fillColor)
-    {
-        if (frame.Type() != MatType.CV_8UC3 || frame.Empty())
-        {
-            DrawOutlinedText(frame, text, new Point(x, y + (int)(28 * scale)), scale, thickness);
-            return;
-        }
-        try
-        {
-            using var bitmap = new System.Drawing.Bitmap(
-                frame.Width,
-                frame.Height,
-                checked((int)frame.Step()),
-                PixelFormat.Format24bppRgb,
-                frame.Data);
-            using var graphics = System.Drawing.Graphics.FromImage(bitmap);
-            graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-            using var family = new System.Drawing.FontFamily("Microsoft YaHei UI");
-            using var path = new GraphicsPath();
-            path.AddString(
-                text,
-                family,
-                (int)System.Drawing.FontStyle.Bold,
-                (float)(27 * scale),
-                new System.Drawing.PointF(x, y),
-                System.Drawing.StringFormat.GenericDefault);
-            using var outline = new System.Drawing.Pen(System.Drawing.Color.Black, Math.Max(3, thickness + 2))
-            {
-                LineJoin = LineJoin.Round
-            };
-            graphics.DrawPath(outline, path);
-            using var fill = new System.Drawing.SolidBrush(fillColor);
-            graphics.FillPath(fill, path);
-            graphics.Flush();
-        }
-        catch (Exception ex) when (ex is ArgumentException or PlatformNotSupportedException)
-        {
-            DrawOutlinedText(frame, text, new Point(x, y + (int)(28 * scale)), scale, thickness);
-        }
-    }
-
-    private static void DrawOutlinedText(Mat frame, string text, Point origin, double scale, int thickness)
-    {
-        Cv2.PutText(frame, text, origin, HersheyFonts.HersheySimplex, scale, Scalar.Black, thickness + 3, LineTypes.AntiAlias);
-        Cv2.PutText(frame, text, origin, HersheyFonts.HersheySimplex, scale, Scalar.White, thickness, LineTypes.AntiAlias);
-    }
-
     private async Task SetRotationAsync(int delta, CancellationToken cancellationToken)
     {
         await _gate.WaitAsync(cancellationToken);
@@ -823,6 +817,7 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
     private static void CopyCameraOptions(CameraOptions source, CameraOptions destination)
     {
         destination.CameraIndex = source.CameraIndex;
+        destination.WindowsSymbolicLink = source.WindowsSymbolicLink;
         destination.SourceKind = source.SourceKind;
         destination.AutoSelectBestCamera = source.AutoSelectBestCamera;
         destination.ProbeCameraCount = source.ProbeCameraCount;
@@ -840,6 +835,7 @@ public sealed class OpenCvRecordingBackend : IRecordingBackend
         destination.NetworkUsername = source.NetworkUsername;
         destination.NetworkPasswordProtected = source.NetworkPasswordProtected;
         destination.HikvisionHost = source.HikvisionHost;
+        destination.HikvisionHttpPort = source.HikvisionHttpPort;
         destination.HikvisionRtspPort = source.HikvisionRtspPort;
         destination.HikvisionChannel = source.HikvisionChannel;
         destination.HikvisionSubStream = source.HikvisionSubStream;

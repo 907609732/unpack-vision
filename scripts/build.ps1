@@ -24,5 +24,17 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & $dotnet build (Join-Path $projectRoot 'UnpackVision.slnx') -c $Configuration --no-restore
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-& $dotnet test (Join-Path $projectRoot 'UnpackVision.slnx') -c $Configuration --no-build --no-restore
-exit $LASTEXITCODE
+# WPF only permits one Application instance per test AppDomain, including after Shutdown.
+# Keep the two rendered-window acceptance tests in independent testhost processes while the
+# remaining suite continues to run together with normal parallelism.
+$solution = Join-Path $projectRoot 'UnpackVision.slnx'
+& $dotnet test $solution -c $Configuration --no-build --no-restore `
+    --filter 'FullyQualifiedName!~HistoryWindowUiTests&FullyQualifiedName!~VideoPlayerWindowUiTests'
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+foreach ($uiTest in @('HistoryWindowUiTests', 'VideoPlayerWindowUiTests')) {
+    & $dotnet test $solution -c $Configuration --no-build --no-restore `
+        --filter "FullyQualifiedName~$uiTest"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+exit 0

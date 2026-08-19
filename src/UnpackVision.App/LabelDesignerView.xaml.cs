@@ -505,7 +505,7 @@ public partial class LabelDesignerView : UserControl
             if (string.IsNullOrWhiteSpace(_document.Name)) throw new InvalidOperationException("请先填写模板名称。");
             await _store.SaveAsync(_document);
             RefreshTemplateList(_document.Name);
-            MessageBox.Show("模板已保存到本机模板库。", "电商拆包智能录像", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("模板已保存到本机模板库。", "拆包智录", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "保存模板失败", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }
@@ -529,7 +529,7 @@ public partial class LabelDesignerView : UserControl
 
     private async void ImportTemplate_OnClick(object sender, RoutedEventArgs e)
     {
-        var dialog = new OpenFileDialog { Filter = "电商拆包智能录像标签模板|*.json" };
+        var dialog = new OpenFileDialog { Filter = "拆包智录标签模板|*.json" };
         if (dialog.ShowDialog() != true) return;
         try { LoadDocument(await LabelTemplateStore.ReadAsync(dialog.FileName)); }
         catch (Exception ex) { MessageBox.Show(ex.Message, "导入模板失败", MessageBoxButton.OK, MessageBoxImage.Warning); }
@@ -537,7 +537,7 @@ public partial class LabelDesignerView : UserControl
 
     private void ExportTemplate_OnClick(object sender, RoutedEventArgs e)
     {
-        var dialog = new SaveFileDialog { Filter = "电商拆包智能录像标签模板|*.json", FileName = _document.Name + ".json" };
+        var dialog = new SaveFileDialog { Filter = "拆包智录标签模板|*.json", FileName = _document.Name + ".json" };
         if (dialog.ShowDialog() != true) return;
         File.WriteAllText(dialog.FileName, LabelTemplateStore.Serialize(_document));
     }
@@ -641,7 +641,7 @@ public partial class LabelDesignerView : UserControl
             var copies = int.TryParse(CopiesInput.Text, out var copyCount) ? Math.Clamp(copyCount, 1, 999) : 1;
             var document = BuildPrintDocument(rows, copies);
             dialog.PrintTicket.PageMediaSize = new PageMediaSize(_document.WidthMm * PrintPixelsPerMm, _document.HeightMm * PrintPixelsPerMm);
-            dialog.PrintDocument(document.DocumentPaginator, $"{_document.Name} - 电商拆包智能录像");
+            dialog.PrintDocument(document.DocumentPaginator, $"{_document.Name} - 拆包智录");
         }
         catch (Exception ex) { MessageBox.Show(ex.Message, "打印失败", MessageBoxButton.OK, MessageBoxImage.Warning); }
     }

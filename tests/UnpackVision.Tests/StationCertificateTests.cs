@@ -8,6 +8,13 @@ using UnpackVision.StationHost;
 
 namespace UnpackVision.Tests;
 
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class StationNetworkCollection
+{
+    public const string Name = "StationNetwork";
+}
+
+[Collection(StationNetworkCollection.Name)]
 public sealed class StationCertificateTests
 {
     [Fact]

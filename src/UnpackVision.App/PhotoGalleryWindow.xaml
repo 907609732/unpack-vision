@@ -1,0 +1,72 @@
+<Window x:Class="UnpackVision.App.PhotoGalleryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="照片查看器" Width="1120" Height="760" MinWidth="820" MinHeight="560"
+        Background="#F4F5F8" WindowStartupLocation="CenterOwner">
+  <Grid Margin="18">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <Grid Margin="4,0,4,14">
+      <StackPanel>
+        <TextBlock x:Name="GalleryTitleText" Text="拍照记录" FontSize="22" FontWeight="SemiBold" Foreground="#1D1D1F" />
+        <TextBlock x:Name="GallerySummaryText" Margin="0,5,0,0" Foreground="#71717A" FontSize="12" />
+      </StackPanel>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+        <Button Content="打开原图" Padding="14,8" Click="OpenImage_OnClick" />
+        <Button Content="打开目录" Padding="14,8" Margin="8,0,0,0" Background="#E9EDF5" Foreground="#374151"
+                Click="OpenFolder_OnClick" />
+      </StackPanel>
+    </Grid>
+
+    <Border Grid.Row="1" Background="White" BorderBrush="#22000000" BorderThickness="1" CornerRadius="18" ClipToBounds="True">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="224" />
+          <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Border Background="#F8F9FB" BorderBrush="#18000000" BorderThickness="0,0,1,0" Padding="10">
+          <ListBox x:Name="PhotoList" BorderThickness="0" Background="Transparent"
+                   SelectionChanged="PhotoList_OnSelectionChanged">
+            <ListBox.ItemTemplate>
+              <DataTemplate>
+                <Border Margin="2,4" Padding="6" CornerRadius="11" Background="White" BorderBrush="#18000000" BorderThickness="1">
+                  <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="86" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Border Width="78" Height="58" CornerRadius="8" Background="#17191D" ClipToBounds="True">
+                      <Image Source="{Binding Thumbnail}" Stretch="UniformToFill" />
+                    </Border>
+                    <StackPanel Grid.Column="1" Margin="9,2,0,0">
+                      <TextBlock Text="{Binding NumberText}" FontWeight="SemiBold" Foreground="#252529" />
+                      <TextBlock Text="{Binding CapturedAtText}" Margin="0,5,0,0" Foreground="#77777C" FontSize="10" TextWrapping="Wrap" />
+                    </StackPanel>
+                  </Grid>
+                </Border>
+              </DataTemplate>
+            </ListBox.ItemTemplate>
+          </ListBox>
+        </Border>
+        <Grid Grid.Column="1" Background="#111318" MouseLeftButtonDown="PreviewImage_OnMouseLeftButtonDown">
+          <Image x:Name="PreviewImage" Stretch="Uniform" Margin="18" />
+          <Border HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="18" Padding="12,6"
+                  CornerRadius="12" Background="#B0000000">
+            <TextBlock x:Name="PhotoNameText" Foreground="White" FontSize="12" TextTrimming="CharacterEllipsis" />
+          </Border>
+        </Grid>
+      </Grid>
+    </Border>
+
+    <Grid Grid.Row="2" Margin="4,14,4,0">
+      <TextBox x:Name="PhotoPathText" Style="{StaticResource SelectableText}" Foreground="#73737A"
+               VerticalAlignment="Center" />
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button x:Name="PreviousButton" Content="上一张" Padding="15,8" Background="#E9EDF5" Foreground="#374151"
+                Click="Previous_OnClick" />
+        <Button x:Name="NextButton" Content="下一张" Padding="15,8" Margin="8,0,0,0" Click="Next_OnClick" />
+      </StackPanel>
+    </Grid>
+  </Grid>
+</Window>

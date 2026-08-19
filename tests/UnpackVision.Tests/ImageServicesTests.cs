@@ -33,9 +33,14 @@ public sealed class ImageServicesTests : IDisposable
 
         Assert.True(File.Exists(result.OutputPath));
         Assert.True(result.Cropped);
-        using var processed = Cv2.ImRead(output, ImreadModes.Unchanged);
-        Assert.Equal(1, processed.Channels());
-        Assert.InRange(processed.Width, 600, 650);
+        using (var processed = Cv2.ImRead(output, ImreadModes.Unchanged))
+        {
+            Assert.Equal(1, processed.Channels());
+            Assert.InRange(processed.Width, 600, 650);
+        }
+
+        AssertCanOpenExclusively(input);
+        AssertCanOpenExclusively(output);
     }
 
     [Fact]
@@ -67,10 +72,49 @@ public sealed class ImageServicesTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_root))
+        const int maximumAttempts = 5;
+        for (var attempt = 1; attempt <= maximumAttempts; attempt++)
         {
-            Directory.Delete(_root, true);
+            try
+            {
+                if (Directory.Exists(_root))
+                {
+                    Directory.Delete(_root, true);
+                }
+                break;
+            }
+            catch (IOException) when (attempt < maximumAttempts)
+            {
+                // Native image codecs and antivirus scanners can briefly retain a Windows file handle
+                // after the owning Mat has been disposed. Keep test cleanup bounded and deterministic.
+                Thread.Sleep(50 * attempt);
+            }
         }
         GC.SuppressFinalize(this);
+    }
+
+    private static void AssertCanOpenExclusively(string path)
+    {
+        const int maximumAttempts = 5;
+        IOException? lastError = null;
+        for (var attempt = 1; attempt <= maximumAttempts; attempt++)
+        {
+            try
+            {
+                using var stream = File.Open(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+                Assert.True(stream.CanRead);
+                Assert.True(stream.CanWrite);
+                return;
+            }
+            catch (IOException error) when (attempt < maximumAttempts)
+            {
+                // Windows may defer native codec/antivirus handle release briefly after the await.
+                // The test still fails deterministically if the handle remains after this bounded wait.
+                lastError = error;
+                Thread.Sleep(50 * attempt);
+            }
+        }
+
+        throw lastError ?? new IOException($"Could not exclusively open {path}.");
     }
 }

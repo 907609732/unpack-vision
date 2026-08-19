@@ -1,4 +1,6 @@
-namespace UnpackVision.Core;
+using UnpackVision.Core;
+
+namespace UnpackVision.Application.Recording;
 
 public enum ScanAction
 {
@@ -23,6 +25,8 @@ public sealed class RecordingCoordinator
     private readonly string _connectorId;
     private RecordingSession? _session;
     private ScanRecord? _currentRecord;
+    private string? _lastAcceptedScanValue;
+    private DateTimeOffset _lastAcceptedScanAt;
 
     public RecordingCoordinator(
         IScanRecordRepository repository,
@@ -161,6 +165,10 @@ public sealed class RecordingCoordinator
         WorkflowMode workflow,
         CancellationToken cancellationToken = default)
     {
+        // Capture arrival before waiting for the operation gate. Camera startup/finalization can
+        // exceed the debounce interval; measuring after the wait would let a concurrent mirror
+        // of the same physical scan stop or restart the recording when the first command finishes.
+        var scanReceivedAt = _clock.Now;
         await _gate.WaitAsync(cancellationToken);
         try
         {
@@ -172,6 +180,15 @@ public sealed class RecordingCoordinator
                 return Notify(new ScanResult(ScanAction.Invalid, validationError));
             }
 
+            if (IsRapidRepeat(trackingValue, scanReceivedAt))
+            {
+                return Notify(new ScanResult(
+                    ScanAction.Busy,
+                    "已忽略短时间内的重复扫码",
+                    _currentRecord));
+            }
+
+            ScanResult result;
             if (_session is not null)
             {
                 var comparison = ScannerProfile.CaseSensitive
@@ -179,7 +196,9 @@ public sealed class RecordingCoordinator
                     : StringComparison.OrdinalIgnoreCase;
                 if (string.Equals(_currentRecord!.TrackingNo, trackingValue, comparison))
                 {
-                    return await StopInternalAsync(cancellationToken);
+                    result = await StopInternalAsync(cancellationToken);
+                    RememberAcceptedScan(trackingValue, scanReceivedAt, result);
+                    return result;
                 }
 
                 var stopped = await StopInternalAsync(cancellationToken);
@@ -188,15 +207,42 @@ public sealed class RecordingCoordinator
                 {
                     return stopped;
                 }
-                return await StartInternalAsync(trackingValue, workflow, cancellationToken, switchedFromPrevious: true);
+                result = await StartInternalAsync(trackingValue, workflow, cancellationToken, switchedFromPrevious: true);
+                RememberAcceptedScan(trackingValue, scanReceivedAt, result);
+                return result;
             }
 
-            return await StartInternalAsync(trackingValue, workflow, cancellationToken);
+            result = await StartInternalAsync(trackingValue, workflow, cancellationToken);
+            RememberAcceptedScan(trackingValue, scanReceivedAt, result);
+            return result;
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    private bool IsRapidRepeat(string trackingValue, DateTimeOffset receivedAt)
+    {
+        if (ScannerProfile.DebounceMilliseconds <= 0 || string.IsNullOrEmpty(_lastAcceptedScanValue))
+        {
+            return false;
+        }
+        var comparison = ScannerProfile.CaseSensitive
+            ? StringComparison.Ordinal
+            : StringComparison.OrdinalIgnoreCase;
+        return string.Equals(_lastAcceptedScanValue, trackingValue, comparison) &&
+               receivedAt - _lastAcceptedScanAt < TimeSpan.FromMilliseconds(ScannerProfile.DebounceMilliseconds);
+    }
+
+    private void RememberAcceptedScan(string trackingValue, DateTimeOffset receivedAt, ScanResult result)
+    {
+        if (result.Action is not (ScanAction.Started or ScanAction.Stopped))
+        {
+            return;
+        }
+        _lastAcceptedScanValue = trackingValue;
+        _lastAcceptedScanAt = receivedAt;
     }
 
     private async Task<ScanResult> StartInternalAsync(
@@ -285,8 +331,21 @@ public sealed class RecordingCoordinator
             record.State = RecordingState.Completed;
             record.RecordingEndedAt = completion.EndedAt;
             record.VideoPath = completion.VideoPath;
+            record.MediaAssets = completion.EffectiveMediaAssets;
+            record.MediaGaps = completion.EffectiveMediaGaps;
+            record.MediaIntegrity = completion.MediaIntegrity;
+            record.DefaultMediaAssetId = completion.EffectiveMediaAssets
+                .FirstOrDefault(asset => string.Equals(asset.VideoPath, completion.EffectiveDefaultVideoPath, StringComparison.OrdinalIgnoreCase))?.Id
+                ?? completion.EffectiveMediaAssets.FirstOrDefault(asset => asset.Role == RecordMediaRole.Composite)?.Id
+                ?? completion.EffectiveMediaAssets.FirstOrDefault()?.Id;
+            record.CameraId = completion.EffectiveMediaAssets.FirstOrDefault(asset => asset.Role == RecordMediaRole.Primary)?.CameraId
+                ?? record.CameraId;
             record.UpdatedAt = _clock.Now;
             await _repository.CompleteAndEnqueueAsync(record, _connectorId, cancellationToken);
+            if (completion.MediaIntegrity == MediaIntegrityStatus.Partial)
+            {
+                await _eventPublisher.PublishAsync("record.media_partial", record, cancellationToken);
+            }
             await _eventPublisher.PublishAsync("record.completed", record, cancellationToken);
             return Notify(new ScanResult(ScanAction.Stopped, "录像已保存", record));
         }

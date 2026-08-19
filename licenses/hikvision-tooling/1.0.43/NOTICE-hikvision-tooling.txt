@@ -1,0 +1,36 @@
+hikvision-tooling v1.0.43-afa00e3 redistribution notice
+======================================================
+
+The packaged sadp.exe is the complete upstream command-line program published by
+https://github.com/cameronnewman/hikvision-tooling at commit
+afa00e3db11bb47914e1f0d724c6975e0a41e218. It contains discovery, device
+information, management-command and legacy password-reset command handlers.
+
+UnpackVision does not remove or claim to disable those upstream entry points inside the
+binary. The UnpackVision adapter starts the executable directly, without a shell, and
+only with this read-only argument shape:
+
+    discover:sadp -xml -timeout <bounded-seconds>s
+
+No camera username or password is passed to the helper. The application projects only
+private IP address, device kind, HTTP port and channel count from its bounded output.
+
+The SHA-256-pinned Windows amd64 binary was inspected with redress v1.2.80. Its Go
+build information reports Go 1.26.5, CGO_ENABLED=0 and these non-standard modules:
+
+    github.com/caarlos0/env/v11 v11.4.1
+    github.com/google/uuid v1.6.0
+    go.uber.org/multierr v1.11.0
+    go.uber.org/zap v1.28.0
+
+The accompanying files reproduce the license notices required for binary redistribution:
+
+    LICENSE-hikvision-tooling.txt  MIT
+    LICENSE-caarlos0-env.txt       MIT
+    LICENSE-google-uuid.txt        BSD-3-Clause
+    LICENSE-uber-multierr.txt      MIT
+    LICENSE-uber-zap.txt           MIT
+    LICENSE-go.txt                 BSD-3-Clause
+
+Test-only modules present in upstream go.sum are not listed because the inspected release
+binary build information does not contain them.

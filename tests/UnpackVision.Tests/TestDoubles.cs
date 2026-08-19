@@ -58,6 +58,53 @@ internal sealed class FakeRecordingBackend(string outputRoot) : IRecordingBacken
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
+internal sealed class BlockingStartRecordingBackend(string outputRoot) : IRecordingBackend
+{
+    private readonly TaskCompletionSource _releaseStart = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private int _startCount;
+    private int _stopCount;
+
+    public TaskCompletionSource StartEntered { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public int StartCount => Volatile.Read(ref _startCount);
+    public int StopCount => Volatile.Read(ref _stopCount);
+
+    public void ReleaseStart() => _releaseStart.TrySetResult();
+
+    public async Task<RecordingSession> StartAsync(
+        Guid recordId,
+        string trackingNo,
+        WorkflowMode workflow,
+        DateTimeOffset scannedAt,
+        CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _startCount);
+        StartEntered.TrySetResult();
+        await _releaseStart.Task.WaitAsync(cancellationToken);
+        Directory.CreateDirectory(outputRoot);
+        var temporary = Path.Combine(outputRoot, $"{recordId:N}.partial.mp4");
+        await File.WriteAllBytesAsync(temporary, [1, 2, 3], cancellationToken);
+        return new RecordingSession(recordId, trackingNo, workflow, scannedAt, temporary);
+    }
+
+    public Task<RecordingCompletion> StopAsync(RecordingSession session, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _stopCount);
+        var output = Path.Combine(outputRoot, $"{session.RecordId:N}.mp4");
+        File.Move(session.TemporaryPath, output);
+        return Task.FromResult(new RecordingCompletion(output, session.StartedAt.AddMinutes(1)));
+    }
+
+    public Task AbortAsync(RecordingSession session, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task UpdateIssueOverlayAsync(
+        Guid recordId,
+        IReadOnlyList<RecordTagAssignment> activeTags,
+        CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task<string> TakeSnapshotAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(Path.Combine(outputRoot, "snapshot.jpg"));
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
 internal sealed class InMemoryRepository : IScanRecordRepository
 {
     public List<ScanRecord> Records { get; } = [];
@@ -80,6 +127,21 @@ internal sealed class InMemoryRepository : IScanRecordRepository
         return Task.CompletedTask;
     }
     public Task UpdateAsync(ScanRecord record, CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public Task<bool> MergeRecoveredAsync(ScanRecord record, CancellationToken cancellationToken = default)
+    {
+        var existing = Records.FirstOrDefault(item => item.Id == record.Id);
+        if (existing is null)
+        {
+            Records.Add(record);
+            return Task.FromResult(true);
+        }
+        if (record.UpdatedAt < existing.UpdatedAt)
+        {
+            return Task.FromResult(false);
+        }
+        Records[Records.IndexOf(existing)] = record;
+        return Task.FromResult(true);
+    }
     public Task CompleteAndEnqueueAsync(ScanRecord record, string connectorId, CancellationToken cancellationToken = default)
     {
         Deliveries.Add(new SyncDelivery { RecordId = record.Id, ConnectorId = connectorId });
@@ -92,6 +154,12 @@ internal sealed class InMemoryRepository : IScanRecordRepository
             record.TrackingNo == trackingNo && record.State is RecordingState.Completed or RecordingState.Collected or RecordingState.Imported));
     public Task<ScanRecord?> FindByVideoPathAsync(string videoPath, CancellationToken cancellationToken = default) =>
         Task.FromResult(Records.FirstOrDefault(record => string.Equals(record.VideoPath, videoPath, StringComparison.OrdinalIgnoreCase)));
+    public Task<IReadOnlyList<RecordMediaAsset>> GetMediaAssetsAsync(Guid recordId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<RecordMediaAsset>>(Records.FirstOrDefault(record => record.Id == recordId)?.MediaAssets ?? []);
+    public Task<RecordMediaAsset?> GetMediaAssetAsync(Guid recordId, Guid assetId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Records.FirstOrDefault(record => record.Id == recordId)?.MediaAssets.FirstOrDefault(asset => asset.Id == assetId));
+    public Task<IReadOnlyList<MediaGap>> GetMediaGapsAsync(Guid recordId, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<MediaGap>>(Records.FirstOrDefault(record => record.Id == recordId)?.MediaGaps ?? []);
     public Task<IReadOnlyList<ScanRecord>> QueryAsync(string? trackingNo = null, int limit = 200, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyList<ScanRecord>>(Records.Take(limit).ToList());
     public Task<IReadOnlyList<ScanRecord>> QueryPageAsync(string? trackingNo, int offset, int limit, CancellationToken cancellationToken = default) =>
@@ -106,6 +174,21 @@ internal sealed class InMemoryRepository : IScanRecordRepository
         var ids = recordIds.ToHashSet();
         Deliveries.RemoveAll(delivery => ids.Contains(delivery.RecordId));
         return Task.FromResult(Records.RemoveAll(record => ids.Contains(record.Id)));
+    }
+    public Task<int> RebaseOwnedPathsAsync(
+        IReadOnlyDictionary<string, string> verifiedPathMap,
+        CancellationToken cancellationToken = default)
+    {
+        var changed = 0;
+        foreach (var record in Records)
+        {
+            if (record.VideoPath is not null && verifiedPathMap.TryGetValue(record.VideoPath, out var replacement))
+            {
+                record.VideoPath = replacement;
+                changed++;
+            }
+        }
+        return Task.FromResult(changed);
     }
     public Task<RecordTagAssignment> AddTagAsync(Guid recordId, IssueTagDefinition tag, DateTimeOffset taggedAt, string source = "scanner", CancellationToken cancellationToken = default)
     {
@@ -168,6 +251,18 @@ internal sealed class InMemoryRepository : IScanRecordRepository
         Task.FromResult<IReadOnlyList<SyncDelivery>>(Deliveries.Take(limit).ToList());
     public Task<SyncDelivery?> GetDeliveryAsync(Guid recordId, string connectorId, CancellationToken cancellationToken = default) =>
         Task.FromResult(Deliveries.LastOrDefault(delivery => delivery.RecordId == recordId && delivery.ConnectorId == connectorId));
+    public Task<IReadOnlyDictionary<Guid, SyncDelivery>> GetLatestDeliveriesAsync(
+        IReadOnlyCollection<Guid> recordIds,
+        string connectorId,
+        CancellationToken cancellationToken = default)
+    {
+        var ids = recordIds.ToHashSet();
+        IReadOnlyDictionary<Guid, SyncDelivery> result = Deliveries
+            .Where(delivery => ids.Contains(delivery.RecordId) && delivery.ConnectorId == connectorId)
+            .GroupBy(delivery => delivery.RecordId)
+            .ToDictionary(group => group.Key, group => group.Last());
+        return Task.FromResult(result);
+    }
     public Task<bool> TryClaimDeliveryAsync(Guid deliveryId, CancellationToken cancellationToken = default) => Task.FromResult(true);
     public Task CompleteDeliveryAsync(Guid deliveryId, string? externalId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     public Task FailDeliveryAsync(Guid deliveryId, string error, DateTimeOffset nextRetryAt, CancellationToken cancellationToken = default) => Task.CompletedTask;

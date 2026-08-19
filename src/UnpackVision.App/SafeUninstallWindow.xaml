@@ -1,0 +1,58 @@
+<Window x:Class="UnpackVision.App.SafeUninstallWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="安全卸载拆包智录" Width="620" Height="560"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
+        Background="#F4F6F9" FontFamily="Microsoft YaHei UI">
+  <Grid Margin="28">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <StackPanel>
+      <TextBlock Text="安全卸载" FontSize="25" FontWeight="SemiBold" Foreground="#17191D" />
+      <TextBlock Margin="0,8,0,0" TextWrapping="Wrap" Foreground="#656B76" LineHeight="21"
+                 Text="卸载程序本身不会自动删除业务数据。请选择是否保留本机数据库、设置和录像。Excel 工作簿始终保留。" />
+    </StackPanel>
+
+    <Border Grid.Row="1" Margin="0,22,0,0" Padding="18" Background="White"
+            BorderBrush="#DEE2E8" BorderThickness="1" CornerRadius="18">
+      <StackPanel>
+        <RadioButton x:Name="KeepDataOption" IsChecked="True" GroupName="UninstallMode"
+                     FontSize="15" FontWeight="SemiBold" Content="保留全部业务数据（推荐）" />
+        <TextBlock Margin="28,7,0,0" TextWrapping="Wrap" Foreground="#6B7280"
+                   Text="下次重新安装后可继续读取数据库、设置、配对信息和原录像目录。" />
+        <Separator Margin="0,17,0,16" />
+        <RadioButton x:Name="DeleteDataOption" GroupName="UninstallMode"
+                     FontSize="15" FontWeight="SemiBold" Foreground="#B42318"
+                     Content="永久删除拆包智录的本机数据和录像" />
+        <TextBlock Margin="28,7,0,0" TextWrapping="Wrap" Foreground="#9A3412" LineHeight="20"
+                   Text="只删除当前工作区中由拆包智录生成的 Unpacking、Packing、Snapshots 和 .unpackvision 数据；不会删除 Excel 或录像目录中的其他文件。选择后还会连续弹出两次警告。" />
+      </StackPanel>
+    </Border>
+
+    <Border Grid.Row="2" Margin="0,18,0,0" Padding="16" Background="#EEF5FF" CornerRadius="14">
+      <StackPanel>
+        <TextBlock Text="将要处理的位置" FontWeight="SemiBold" Foreground="#245A8D" />
+        <TextBlock Margin="0,10,0,3" Text="本机数据" Foreground="#56708A" />
+        <TextBox x:Name="LocalDataPathText" IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                 TextWrapping="Wrap" Foreground="#1F4E79" />
+        <TextBlock Margin="0,9,0,3" Text="录像目录" Foreground="#56708A" />
+        <TextBox x:Name="RecordingPathText" IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                 TextWrapping="Wrap" Foreground="#1F4E79" />
+        <TextBlock Margin="0,9,0,3" Text="Excel（始终保留）" Foreground="#56708A" />
+        <TextBox x:Name="ExcelPathText" IsReadOnly="True" BorderThickness="0" Background="Transparent"
+                 TextWrapping="Wrap" Foreground="#1F4E79" />
+      </StackPanel>
+    </Border>
+
+    <StackPanel Grid.Row="3" Margin="0,22,0,0" Orientation="Horizontal" HorizontalAlignment="Right">
+      <Button Content="取消" MinWidth="96" Padding="18,9" Click="Cancel_OnClick" />
+      <Button Content="继续卸载" MinWidth="112" Padding="18,9" Margin="10,0,0,0"
+              Background="#1677FF" Foreground="White" BorderThickness="0" Click="Continue_OnClick" />
+    </StackPanel>
+  </Grid>
+</Window>

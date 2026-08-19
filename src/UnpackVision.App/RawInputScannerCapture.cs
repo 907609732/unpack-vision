@@ -22,10 +22,11 @@ public sealed class RawInputScannerCapture : IDisposable
     private const uint WmKeyDown = 0x0100;
     private const uint WmSysKeyDown = 0x0104;
     private const ushort VkReturn = 0x0D;
+    private const ushort VkTab = 0x09;
     private const ushort VkBack = 0x08;
 
     private readonly Func<ScannerProfile> _profileProvider;
-    private readonly Dictionary<nint, DeviceBuffer> _buffers = [];
+    private readonly Dictionary<nint, ScannerKeystrokeBuffer> _buffers = [];
     private HwndSource? _source;
     private bool _disposed;
 
@@ -56,6 +57,14 @@ public sealed class RawInputScannerCapture : IDisposable
     }
 
     public event EventHandler<BarcodeScannedEventArgs>? BarcodeScanned;
+
+    internal void DiscardBufferedInput()
+    {
+        foreach (var buffer in _buffers.Values)
+        {
+            buffer.Discard();
+        }
+    }
 
     private nint WindowProc(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
     {
@@ -105,21 +114,15 @@ public sealed class RawInputScannerCapture : IDisposable
 
         if (!_buffers.TryGetValue(device, out var buffer))
         {
-            buffer = new DeviceBuffer();
+            buffer = new ScannerKeystrokeBuffer();
             _buffers[device] = buffer;
         }
         var now = Environment.TickCount64;
-        if (now - buffer.LastKeyAt > Math.Max(250, profile.DebounceMilliseconds * 4))
-        {
-            buffer.Text.Clear();
-        }
-        buffer.LastKeyAt = now;
 
-        if (keyboard.VirtualKey == VkReturn)
+        if (IsTerminator(keyboard.VirtualKey, profile.Terminator))
         {
-            var value = buffer.Text.ToString();
-            buffer.Text.Clear();
-            if (!string.IsNullOrWhiteSpace(value))
+            var value = buffer.Complete(now);
+            if (value is not null)
             {
                 BarcodeScanned?.Invoke(this, new BarcodeScannedEventArgs(value, deviceName));
             }
@@ -127,19 +130,21 @@ public sealed class RawInputScannerCapture : IDisposable
         }
         if (keyboard.VirtualKey == VkBack)
         {
-            if (buffer.Text.Length > 0)
-            {
-                buffer.Text.Length--;
-            }
+            buffer.Backspace(now);
             return;
         }
 
         var character = TranslateKey(keyboard.VirtualKey, keyboard.MakeCode);
         if (character is not null && !char.IsControl(character.Value))
         {
-            buffer.Text.Append(character.Value);
+            buffer.Append(character.Value, now);
         }
     }
+
+    private static bool IsTerminator(ushort virtualKey, string? configuredTerminator) =>
+        string.Equals(configuredTerminator, "Tab", StringComparison.OrdinalIgnoreCase)
+            ? virtualKey == VkTab
+            : virtualKey == VkReturn;
 
     private static char? TranslateKey(ushort virtualKey, ushort scanCode)
     {
@@ -193,12 +198,6 @@ public sealed class RawInputScannerCapture : IDisposable
         _source?.RemoveHook(WindowProc);
         _source = null;
         _buffers.Clear();
-    }
-
-    private sealed class DeviceBuffer
-    {
-        public StringBuilder Text { get; } = new();
-        public long LastKeyAt { get; set; }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -275,4 +274,139 @@ public sealed class RawInputScannerCapture : IDisposable
 
     [DllImport("user32.dll")]
     private static extern nint GetKeyboardLayout(uint threadId);
+}
+
+/// <summary>
+/// Keeps one HID keyboard's barcode characters isolated. Scanner repeat suppression and
+/// inter-key framing are deliberately separate: the former is a business setting measured
+/// in seconds, while a hardware scanner emits one barcode in a compact burst. Reusing the
+/// business debounce interval here allowed a missing terminator to join two parcels.
+/// </summary>
+internal sealed class ScannerKeystrokeBuffer
+{
+    internal const long MaximumInterKeyDelayMilliseconds = 250;
+    private const int MaximumBufferedCharacters = 512;
+    private readonly StringBuilder _text = new();
+    private long _lastKeyAt;
+    private bool _overflowed;
+
+    public void Append(char character, long timestamp)
+    {
+        ResetAfterIdle(timestamp);
+        _lastKeyAt = timestamp;
+        if (_overflowed)
+        {
+            return;
+        }
+        if (_text.Length >= MaximumBufferedCharacters)
+        {
+            _text.Clear();
+            _overflowed = true;
+            return;
+        }
+        _text.Append(character);
+    }
+
+    public void Backspace(long timestamp)
+    {
+        ResetAfterIdle(timestamp);
+        _lastKeyAt = timestamp;
+        if (!_overflowed && _text.Length > 0)
+        {
+            _text.Length--;
+        }
+    }
+
+    public string? Complete(long timestamp)
+    {
+        ResetAfterIdle(timestamp);
+        _lastKeyAt = timestamp;
+        if (_overflowed || _text.Length == 0)
+        {
+            Reset();
+            return null;
+        }
+
+        var value = _text.ToString();
+        Reset();
+        return value;
+    }
+
+    public void Discard()
+    {
+        Reset();
+        _lastKeyAt = 0;
+    }
+
+    private void ResetAfterIdle(long timestamp)
+    {
+        if (_lastKeyAt != 0 && timestamp - _lastKeyAt > MaximumInterKeyDelayMilliseconds)
+        {
+            Reset();
+        }
+    }
+
+    private void Reset()
+    {
+        _text.Clear();
+        _overflowed = false;
+    }
+}
+
+internal readonly record struct ScannerFallbackTicket(int RawGeneration, long ObservedAt);
+
+/// <summary>
+/// Arbitrates the device-aware Raw Input path and the legacy TextBox fallback. Windows can
+/// deliver those messages in either order, so fallback execution is briefly deferred and is
+/// cancelled when a Raw Input completion appears on either side of the Enter event.
+/// </summary>
+internal sealed class ScannerInputSourceGate
+{
+    internal const int FallbackGraceMilliseconds = 75;
+    internal const long UnmatchedRawLifetimeMilliseconds = 500;
+    private readonly object _sync = new();
+    private readonly Queue<long> _unmatchedRawCompletions = new();
+    private int _rawGeneration;
+
+    public void ObserveRaw(long timestamp)
+    {
+        lock (_sync)
+        {
+            TrimExpired(timestamp);
+            _unmatchedRawCompletions.Enqueue(timestamp);
+            _rawGeneration++;
+        }
+    }
+
+    public ScannerFallbackTicket BeginFallback(long timestamp)
+    {
+        lock (_sync)
+        {
+            TrimExpired(timestamp);
+            return new ScannerFallbackTicket(_rawGeneration, timestamp);
+        }
+    }
+
+    public bool ShouldProcessFallback(ScannerFallbackTicket ticket, long timestamp)
+    {
+        lock (_sync)
+        {
+            TrimExpired(timestamp);
+            if (_unmatchedRawCompletions.Count > 0)
+            {
+                _unmatchedRawCompletions.Dequeue();
+                return false;
+            }
+            return ticket.RawGeneration == _rawGeneration;
+        }
+    }
+
+    private void TrimExpired(long timestamp)
+    {
+        while (_unmatchedRawCompletions.TryPeek(out var observedAt) &&
+               timestamp - observedAt > UnmatchedRawLifetimeMilliseconds)
+        {
+            _unmatchedRawCompletions.Dequeue();
+        }
+    }
 }

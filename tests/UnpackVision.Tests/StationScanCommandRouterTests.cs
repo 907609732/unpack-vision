@@ -67,6 +67,37 @@ public sealed class StationScanCommandRouterTests : IDisposable
     }
 
     [Fact]
+    public async Task ConcurrentDeliveryOfSameIdempotencyKeyRunsCommandOnce()
+    {
+        var repository = new InMemoryRepository();
+        var backend = new BlockingStartRecordingBackend(_temp);
+        var profile = new ScannerProfile();
+        var clock = new FakeClock(new DateTimeOffset(2026, 7, 21, 9, 0, 0, TimeSpan.FromHours(8)));
+        var coordinator = new RecordingCoordinator(repository, backend, new NullEventPublisher(), clock, profile);
+        var router = new StationScanCommandRouter(coordinator, repository, clock, profile);
+        var command = new ScanCommand
+        {
+            EventId = Guid.NewGuid(),
+            IdempotencyKey = "test-event-concurrent",
+            DeviceId = "test-scanner",
+            Value = "TEST-PARCEL-ALPHA",
+            Mode = DeviceOperatingMode.HandheldScanner
+        };
+
+        var firstTask = router.RouteAsync(command);
+        await backend.StartEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var replayTask = router.RouteAsync(command with { EventId = Guid.NewGuid() });
+        backend.ReleaseStart();
+        var acknowledgements = await Task.WhenAll(firstTask, replayTask);
+
+        Assert.Equal(acknowledgements[0].RecordId, acknowledgements[1].RecordId);
+        Assert.Equal(ScanCommandAction.RecordingStarted, acknowledgements[0].Action);
+        Assert.Equal(1, backend.StartCount);
+        Assert.Equal(0, backend.StopCount);
+        Assert.Single(repository.Records);
+    }
+
+    [Fact]
     public async Task HandheldCommandUsesExistingRecordingCoordinator()
     {
         var repository = new InMemoryRepository();
@@ -134,6 +165,40 @@ public sealed class StationScanCommandRouterTests : IDisposable
 
         Assert.Equal(ScanCommandAction.IssueUndone, undone.Action);
         Assert.Empty(backend.OverlayTags);
+    }
+
+    [Theory]
+    [InlineData(IssueTagDefaults.MissingBarcode, IssueTagDefaults.MissingTagId, "少件")]
+    [InlineData(IssueTagDefaults.PurchaseBarcode, IssueTagDefaults.PurchaseTagId, "采购")]
+    public async Task IssueRemoteCanApplyNewDefaultTags(
+        string barcode,
+        string expectedTagId,
+        string expectedName)
+    {
+        var repository = new InMemoryRepository();
+        var backend = new FakeRecordingBackend(_temp);
+        var profile = new ScannerProfile();
+        var clock = new FakeClock(DateTimeOffset.Now);
+        var coordinator = new RecordingCoordinator(repository, backend, new NullEventPublisher(), clock, profile);
+        var router = new StationScanCommandRouter(coordinator, repository, clock, profile);
+        await router.RouteAsync(new ScanCommand
+        {
+            DeviceId = "phone-a",
+            Value = "SF1234567890",
+            Mode = DeviceOperatingMode.HandheldScanner
+        });
+
+        var acknowledgement = await router.RouteAsync(new ScanCommand
+        {
+            DeviceId = "phone-a",
+            Value = barcode,
+            Mode = DeviceOperatingMode.IssueRemote
+        });
+
+        Assert.Equal(ScanCommandAction.IssueTagged, acknowledgement.Action);
+        var tag = Assert.Single(repository.Records[0].Tags);
+        Assert.Equal(expectedTagId, tag.TagId);
+        Assert.Equal(expectedName, tag.TagName);
     }
 
     [Fact]

@@ -87,6 +87,34 @@ public static class RecordingFileNameService
         return Path.Combine(directory, $"{baseName}_{recordId.ToString("N")[..8]}.mp4");
     }
 
+    public static string GetAvailableMediaPath(
+        string primaryPath,
+        RecordMediaRole role,
+        string displayName,
+        Guid recordId)
+    {
+        if (role == RecordMediaRole.Primary)
+        {
+            return primaryPath;
+        }
+        var directory = Path.GetDirectoryName(primaryPath)!;
+        var baseName = Path.GetFileNameWithoutExtension(primaryPath);
+        var suffix = role == RecordMediaRole.Composite
+            ? "多机位"
+            : $"机位-{SanitizePart(displayName)}";
+        var maximumBaseLength = Math.Max(1, MaximumSafePathLength - directory.Length - suffix.Length - 6);
+        if (baseName.Length > maximumBaseLength)
+        {
+            baseName = baseName[..maximumBaseLength].TrimEnd('-', '_', ' ');
+        }
+        var candidate = Path.Combine(directory, $"{baseName}_{suffix}.mp4");
+        if (!File.Exists(candidate))
+        {
+            return candidate;
+        }
+        return Path.Combine(directory, $"{baseName}_{suffix}_{recordId.ToString("N")[..8]}.mp4");
+    }
+
     public static string SanitizePart(string value)
     {
         var invalid = Path.GetInvalidFileNameChars().ToHashSet();

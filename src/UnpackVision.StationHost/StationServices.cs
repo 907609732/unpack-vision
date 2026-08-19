@@ -54,6 +54,7 @@ public sealed class StationHostOptions
     public string SecurityDirectory { get; set; } =
         "%LOCALAPPDATA%\\UnpackVision\\Security";
     public int PairingLifetimeMinutes { get; set; } = 5;
+    public int LoopbackPort { get; set; } = 5271;
     public bool LanHttpPrototypeEnabled { get; set; }
     public bool LanHttpsEnabled { get; set; } = true;
     public int LanHttpsPort { get; set; } = 5273;

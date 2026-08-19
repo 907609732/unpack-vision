@@ -28,16 +28,26 @@ $hostExecutable = Get-ChildItem -LiteralPath $hostOutputDirectory -Filter "*.exe
     Select-Object -First 1 -ExpandProperty FullName
 $mediaExecutable = Join-Path $repositoryRoot "tools\mediamtx\1.18.2\mediamtx.exe"
 $hostProcess = $null
+$loopbackPort = 5282
+$controlPort = 19997
 
 try {
     $arguments = @(
-        "--urls", "http://127.0.0.1:5271",
+        "--StationHost:LoopbackPort=$loopbackPort",
+        "--StationHost:LanHttpsEnabled=false",
+        "--StationHost:AdvertisedAddress=https://127.0.0.1:$loopbackPort",
         "--Storage:DatabasePath=$databasePath",
         "--Storage:RecordingRoot=$temporaryRoot\videos",
         "--StationHost:SecurityDirectory=$securityRoot",
         "--StationHost:StationId=media-smoke",
         "--MediaRelay:RuntimeDirectory=$relayRoot",
-        "--MediaRelay:ExecutablePath=$mediaExecutable"
+        "--MediaRelay:ExecutablePath=$mediaExecutable",
+        "--MediaRelay:AuthHttpAddress=http://127.0.0.1:$loopbackPort/internal/media/auth",
+        "--MediaRelay:ControlApiAddress=http://127.0.0.1:$controlPort",
+        "--MediaRelay:RtspPort=18554",
+        "--MediaRelay:RtspsPort=18555",
+        "--MediaRelay:WebRtcPort=18889",
+        "--MediaRelay:WebRtcUdpPort=18189"
     )
     $hostExists = Test-Path -LiteralPath $hostExecutable
     $mediaExists = Test-Path -LiteralPath $mediaExecutable
@@ -50,13 +60,14 @@ try {
     $processInfo.UseShellExecute = $false
     $processInfo.CreateNoWindow = $true
     $processInfo.Arguments = $arguments -join " "
+    $processInfo.Environment["UNPACKVISION_ALLOW_TEST_INSTANCE"] = "1"
     $hostProcess = [System.Diagnostics.Process]::Start($processInfo)
 
     $health = $null
     for ($attempt = 0; $attempt -lt 40; $attempt++) {
         Start-Sleep -Milliseconds 250
         try {
-            $health = Invoke-RestMethod -Uri "http://127.0.0.1:5271/api/v1/health" -TimeoutSec 2
+            $health = Invoke-RestMethod -Uri "http://127.0.0.1:$loopbackPort/api/v1/health" -TimeoutSec 2
             break
         }
         catch {
@@ -67,7 +78,7 @@ try {
         throw "StationHost did not become healthy."
     }
 
-    $session = Invoke-RestMethod -Uri "http://127.0.0.1:5271/api/v1/pairing/sessions" -Method Post
+    $session = Invoke-RestMethod -Uri "http://127.0.0.1:$loopbackPort/api/v1/pairing/sessions" -Method Post
     $pairBody = @{
         sessionId = $session.id
         token = $session.token
@@ -77,7 +88,7 @@ try {
         scopes = @("scan:send", "camera:publish", "records:read", "video:read")
     } | ConvertTo-Json
     $credential = Invoke-RestMethod `
-        -Uri "http://127.0.0.1:5271/device/v1/pair" `
+        -Uri "http://127.0.0.1:$loopbackPort/device/v1/pair" `
         -Method Post `
         -ContentType "application/json" `
         -Body $pairBody
@@ -86,11 +97,11 @@ try {
         Authorization = "Bearer $($credential.accessToken)"
     }
     $publish = Invoke-RestMethod `
-        -Uri "http://127.0.0.1:5271/api/v1/media/publish-session" `
+        -Uri "http://127.0.0.1:$loopbackPort/api/v1/media/publish-session" `
         -Method Post `
         -Headers $headers `
         -TimeoutSec 15
-    $relayInfo = Invoke-RestMethod -Uri "http://127.0.0.1:9997/v3/info" -TimeoutSec 5
+    $relayInfo = Invoke-RestMethod -Uri "http://127.0.0.1:$controlPort/v3/info" -TimeoutSec 5
     $authBody = @{
         user = $credential.device.id
         password = $credential.accessToken
@@ -101,22 +112,22 @@ try {
         protocol = "rtsp"
     } | ConvertTo-Json
     $null = Invoke-RestMethod `
-        -Uri "http://127.0.0.1:5271/internal/media/auth" `
+        -Uri "http://127.0.0.1:$loopbackPort/internal/media/auth" `
         -Method Post `
         -ContentType "application/json" `
         -Body $authBody `
         -TimeoutSec 5
     $stationId = [uri]::EscapeDataString('media-smoke')
     $stationState = Invoke-RestMethod `
-        -Uri "http://127.0.0.1:5271/api/v1/stations/$stationId/state" `
+        -Uri "http://127.0.0.1:$loopbackPort/api/v1/stations/$stationId/state" `
         -Headers $headers `
         -TimeoutSec 5
     $live = Invoke-RestMethod `
-        -Uri "http://127.0.0.1:5271/api/v1/stations/$stationId/live?deviceId=$($credential.device.id)" `
+        -Uri "http://127.0.0.1:$loopbackPort/api/v1/stations/$stationId/live?deviceId=$($credential.device.id)" `
         -Headers $headers `
         -TimeoutSec 10
 
-    [pscustomobject]@{
+    $result = [pscustomobject]@{
         StationHealthy = $health.status
         MediaRelayRunning = $publish.rtspUrl -like "rtsps://*"
         RelayVersion = $relayInfo.version
@@ -126,6 +137,14 @@ try {
         StationState = $stationState.recordingState
         WhepUrl = $live.whepUrl
         RuntimeConfigExists = Test-Path (Join-Path $relayRoot "mediamtx.yml")
+    }
+    $result
+    if ($result.StationHealthy -ne 'healthy' -or
+        -not $result.MediaRelayRunning -or
+        $result.AuthStatus -ne 200 -or
+        -not $result.RuntimeConfigExists -or
+        [string]::IsNullOrWhiteSpace($result.WhepUrl)) {
+        throw "Media relay smoke-test result did not match the release contract."
     }
 }
 finally {

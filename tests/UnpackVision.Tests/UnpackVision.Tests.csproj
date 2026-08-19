@@ -5,15 +5,125 @@
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../src/UnpackVision.Application/UnpackVision.Application.csproj" />
     <ProjectReference Include="../../src/UnpackVision.Core/UnpackVision.Core.csproj" />
     <ProjectReference Include="../../src/UnpackVision.Infrastructure/UnpackVision.Infrastructure.csproj" />
     <ProjectReference Include="../../src/UnpackVision.App/UnpackVision.App.csproj" />
     <ProjectReference Include="../../src/UnpackVision.StationHost/UnpackVision.StationHost.csproj" />
+    <ProjectReference Include="../../scripts/acceptance/UnpackVision.Acceptance.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageReference Include="TngTech.ArchUnitNET.xUnit" Version="0.13.3" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5">
       <PrivateAssets>all</PrivateAssets>
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="../../src/UnpackVision.App/MainWindow.xaml"
+          Link="TestData/MainWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/MainWindow.xaml.cs"
+          Link="TestData/MainWindow.xaml.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/App.xaml"
+          Link="TestData/App.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/SettingsWindow.xaml"
+          Link="TestData/SettingsWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/SettingsWindow.xaml.cs"
+          Link="TestData/SettingsWindow.xaml.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/StoragePoolWindow.xaml"
+          Link="TestData/StoragePoolWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/StoragePoolWindow.xaml.cs"
+          Link="TestData/StoragePoolWindow.xaml.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/CameraProfileDialog.xaml"
+          Link="TestData/CameraProfileDialog.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/CameraProfileDialog.xaml.cs"
+          Link="TestData/CameraProfileDialog.xaml.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/CameraTestProgressWindow.xaml"
+          Link="TestData/CameraTestProgressWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/CameraTestProgressWindow.xaml.cs"
+          Link="TestData/CameraTestProgressWindow.xaml.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/Styles/SettingsWindowStyles.xaml"
+          Link="TestData/SettingsWindowStyles.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/FirstRunConsentWindow.xaml"
+          Link="TestData/FirstRunConsentWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/SetupWizardWindow.xaml"
+          Link="TestData/SetupWizardWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/SafeUninstallWindow.xaml"
+          Link="TestData/SafeUninstallWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/SafeUninstallWindow.xaml.cs"
+          Link="TestData/SafeUninstallWindow.xaml.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/UnpackVision.App.csproj"
+          Link="TestData/UnpackVision.App.csproj"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/ProductInfo.cs"
+          Link="TestData/ProductInfo.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.Service/UnpackVision.Service.csproj"
+          Link="TestData/UnpackVision.Service.csproj"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.StationHost/UnpackVision.StationHost.csproj"
+          Link="TestData/UnpackVision.StationHost.csproj"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../mobile/UnpackVision.Android/app/build.gradle.kts"
+          Link="TestData/android-app-build.gradle.kts"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../docs/releases/2.5.2.md"
+          Link="TestData/release-2.5.2.md"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/HistoryWindow.xaml"
+          Link="TestData/HistoryWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/PhotoGalleryWindow.xaml"
+          Link="TestData/PhotoGalleryWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/PairedDevicesWindow.xaml"
+          Link="TestData/PairedDevicesWindow.xaml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../.github/workflows/release.yml"
+          Link="TestData/release.yml"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../scripts/stage-media-runtimes.ps1"
+          Link="TestData/stage-media-runtimes.ps1"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../scripts/verify-media-runtime-package.ps1"
+          Link="TestData/verify-media-runtime-package.ps1"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../scripts/test-ffmpeg-redistribution.ps1"
+          Link="TestData/test-ffmpeg-redistribution.ps1"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../scripts/publish.ps1"
+          Link="TestData/publish.ps1"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../scripts/stage-hikvision-sadp.ps1"
+          Link="TestData/stage-hikvision-sadp.ps1"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../scripts/verify-hikvision-sadp-package.ps1"
+          Link="TestData/verify-hikvision-sadp-package.ps1"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../THIRD_PARTY_NOTICES.md"
+          Link="TestData/THIRD_PARTY_NOTICES.md"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../scripts/package-release.ps1"
+          Link="TestData/package-release.ps1"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../src/UnpackVision.App/Assets/telemetry-endpoint.txt"
+          Link="TestData/telemetry-endpoint.txt"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

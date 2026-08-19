@@ -4,6 +4,7 @@ param()
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Security
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$telemetryEndpointPath = Join-Path $repositoryRoot 'src\UnpackVision.App\Assets\telemetry-endpoint.txt'
 $signingRoot = Join-Path $env:LOCALAPPDATA 'UnpackVision\Signing'
 $keystorePath = Join-Path $signingRoot 'ecommerce-unpack-recorder-release.jks'
 $credentialPath = Join-Path $signingRoot 'android-signing.protected.json'
@@ -20,6 +21,11 @@ $plain = [Security.Cryptography.ProtectedData]::Unprotect(
     [Security.Cryptography.DataProtectionScope]::CurrentUser)
 try {
     $password = [Text.Encoding]::UTF8.GetString($plain)
+    if ([string]::IsNullOrWhiteSpace($env:UNPACKVISION_TELEMETRY_ENDPOINT) -and
+        (Test-Path -LiteralPath $telemetryEndpointPath)) {
+        $env:UNPACKVISION_TELEMETRY_ENDPOINT =
+            (Get-Content -LiteralPath $telemetryEndpointPath -Raw -Encoding UTF8).Trim()
+    }
     $env:ANDROID_KEYSTORE_PATH = $keystorePath
     $env:ANDROID_KEYSTORE_PASSWORD = $password
     $env:ANDROID_KEY_ALIAS = [string]$json.keyAlias
