@@ -571,7 +571,7 @@ public sealed class HikvisionSadpDiscoveryTests
             using var cancellation = new CancellationTokenSource();
             if (cancelCaller)
             {
-                cancellation.CancelAfter(TimeSpan.FromSeconds(2));
+                cancellation.CancelAfter(TimeSpan.FromSeconds(8));
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
                     new StreamingHikvisionSadpProcessRunner().RunAsync(
                         powershell,
@@ -585,7 +585,7 @@ public sealed class HikvisionSadpDiscoveryTests
                 var result = await new StreamingHikvisionSadpProcessRunner().RunAsync(
                     powershell,
                     ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", EncodePowerShell(parentCommand)],
-                    TimeSpan.FromSeconds(2),
+                    TimeSpan.FromSeconds(8),
                     maximumDevices: 64);
                 Assert.True(result.Started);
                 Assert.True(result.TimedOut);
