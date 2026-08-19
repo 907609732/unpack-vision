@@ -16,8 +16,8 @@ android {
         applicationId = "com.unpackvision.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20502
-        versionName = "2.5.2"
+        versionCode = 20503
+        versionName = "2.5.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         val telemetryEndpoint = System.getenv("UNPACKVISION_TELEMETRY_ENDPOINT") ?: ""
         buildConfigField("String", "TELEMETRY_ENDPOINT", "\"${telemetryEndpoint.replace("\"", "\\\"")}\"")

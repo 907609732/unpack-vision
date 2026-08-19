@@ -424,7 +424,7 @@
                  KeyDown="ScannerInput_OnKeyDown" />
         <TextBox x:Name="SyncStatusText" Text="Excel：等待任务" Style="{StaticResource SelectableText}" Foreground="#8C8C91" FontSize="10"
                    VerticalAlignment="Center" Margin="12,0,0,0" />
-        <TextBlock Text="版本 2.5.2 · 开发者 五成" Foreground="#A0A0A5" FontSize="10" VerticalAlignment="Center" Margin="14,0,0,0" />
+        <TextBlock Text="版本 2.5.3 · 开发者 五成" Foreground="#A0A0A5" FontSize="10" VerticalAlignment="Center" Margin="14,0,0,0" />
       </StackPanel>
     </Grid>
 

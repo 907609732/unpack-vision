@@ -26,14 +26,14 @@ public sealed class StationHostHealthTests
     {
         var payload = StationHostEndpointSupport.BuildHealthPayload(
             isLoopback: false,
-            version: "2.5.2",
+            version: "2.5.3",
             tlsEnabled: true,
             lanAddresses: [IPAddress.Parse("192.0.2.10")],
             currentTime: FixedTime);
 
         Assert.Equal(["status", "version"], payload.Keys);
         Assert.Equal("healthy", payload["status"]);
-        Assert.Equal("2.5.2", payload["version"]);
+        Assert.Equal("2.5.3", payload["version"]);
         Assert.DoesNotContain("tls", payload.Keys);
         Assert.DoesNotContain("lanAddresses", payload.Keys);
         Assert.DoesNotContain("time", payload.Keys);
@@ -50,14 +50,14 @@ public sealed class StationHostHealthTests
 
         var payload = StationHostEndpointSupport.BuildHealthPayload(
             isLoopback: true,
-            version: "2.5.2",
+            version: "2.5.3",
             tlsEnabled: true,
             lanAddresses: addresses,
             currentTime: FixedTime);
 
         Assert.Equal(["status", "version", "tls", "lanAddresses", "time"], payload.Keys);
         Assert.Equal("healthy", payload["status"]);
-        Assert.Equal("2.5.2", payload["version"]);
+        Assert.Equal("2.5.3", payload["version"]);
         Assert.Equal(true, payload["tls"]);
         Assert.Equal(
             ["192.0.2.10", "198.51.100.5"],

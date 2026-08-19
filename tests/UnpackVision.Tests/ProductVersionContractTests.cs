@@ -4,7 +4,7 @@ namespace UnpackVision.Tests;
 
 public sealed class ProductVersionContractTests
 {
-    private const string Version = "2.5.2";
+    private const string Version = "2.5.3";
 
     [Fact]
     public void WindowsExecutableProjectsAndProductFallbackUseOneVersion()
@@ -29,15 +29,15 @@ public sealed class ProductVersionContractTests
     {
         var gradle = File.ReadAllText(TestData("android-app-build.gradle.kts"));
         Assert.Contains("applicationId = \"com.unpackvision.mobile\"", gradle, StringComparison.Ordinal);
-        Assert.Contains("versionCode = 20502", gradle, StringComparison.Ordinal);
+        Assert.Contains("versionCode = 20503", gradle, StringComparison.Ordinal);
         Assert.Contains($"versionName = \"{Version}\"", gradle, StringComparison.Ordinal);
     }
 
     [Fact]
     public void ReleaseNotesKeepUnsignedWindowsBuildInPrereleaseChannel()
     {
-        var notes = File.ReadAllText(TestData("release-2.5.2.md"));
-        Assert.Contains("2.5.2 预发布说明", notes, StringComparison.Ordinal);
+        var notes = File.ReadAllText(TestData("release-2.5.3.md"));
+        Assert.Contains("2.5.3 预发布说明", notes, StringComparison.Ordinal);
         Assert.Contains("未取得可信 Authenticode 代码签名", notes, StringComparison.Ordinal);
         Assert.Contains("不能标记为正式稳定版", notes, StringComparison.Ordinal);
     }

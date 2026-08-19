@@ -83,8 +83,8 @@
     <None Include="../../mobile/UnpackVision.Android/app/build.gradle.kts"
           Link="TestData/android-app-build.gradle.kts"
           CopyToOutputDirectory="PreserveNewest" />
-    <None Include="../../docs/releases/2.5.2.md"
-          Link="TestData/release-2.5.2.md"
+    <None Include="../../docs/releases/2.5.3.md"
+          Link="TestData/release-2.5.3.md"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../src/UnpackVision.App/HistoryWindow.xaml"
           Link="TestData/HistoryWindow.xaml"
