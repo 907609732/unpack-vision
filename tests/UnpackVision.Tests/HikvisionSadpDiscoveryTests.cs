@@ -578,7 +578,10 @@ public sealed class HikvisionSadpDiscoveryTests
                     await new StreamingHikvisionSadpProcessRunner().RunAsync(
                         powershell,
                         ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", EncodePowerShell(parentCommand)],
-                        TimeSpan.FromSeconds(20),
+                        // The caller cancellation remains the test deadline. Keep the runner
+                        // timeout longer so CodeQL instrumentation cannot preempt the child
+                        // startup and turn this process-tree security test into a false failure.
+                        TimeSpan.FromSeconds(60),
                         maximumDevices: 64,
                         cancellation.Token);
                 }
